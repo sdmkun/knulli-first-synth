@@ -13,7 +13,7 @@ struct SeqNote {
 };
 
 struct SeqStep {
-    static constexpr int kMaxNotes = 4;
+    static constexpr int kMaxNotes = 8; // one per pad, so a drum step can hold the whole kit
     SeqNote notes[kMaxNotes];
     bool    empty() const;
 };
@@ -41,7 +41,8 @@ public:
         int    step  = -1;
         int    slot  = -1;
         int    pitch = -1;
-        double start = 0.0; // quantized start, in absolute steps
+        double start = 0.0;   // quantized start, in absolute steps
+        bool   full  = false; // the step already held kMaxNotes other notes; nothing was recorded
     };
 
     void init(int sampleRate);

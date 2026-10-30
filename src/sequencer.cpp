@@ -178,7 +178,10 @@ Sequencer::RecHandle Sequencer::record(int track, int pitch) {
         if (s.notes[i].pitch == pitch) slot = i; // same pitch again: overwrite
     for (int i = 0; i < SeqStep::kMaxNotes && slot < 0; ++i)
         if (s.notes[i].pitch < 0) slot = i;
-    if (slot < 0) return h; // step full
+    if (slot < 0) {
+        h.full = true;
+        return h;
+    }
 
     // Not fired yet this pass, but already heard live: skip it once.
     s.notes[slot] = {int8_t(pitch), 1, offset > 0};

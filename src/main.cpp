@@ -469,7 +469,10 @@ void onPress(App& a, Btn b) {
         curInst(a).noteOn(pad, note);
         a.padDown[pad] = true;
         if (a.isDrum[a.track]) a.drumPad[a.track] = pad; // EDIT follows the last hit
-        if (a.seq.recording) a.rec[pad] = a.seq.record(a.track, note);
+        if (a.seq.recording) {
+            a.rec[pad] = a.seq.record(a.track, note);
+            if (a.rec[pad].full) a.lastInput = "STEP FULL: NOTE NOT RECORDED";
+        }
         return;
     }
 
