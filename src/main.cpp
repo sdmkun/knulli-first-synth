@@ -29,12 +29,14 @@ enum Btn {
     BTN_A, BTN_B, BTN_X, BTN_Y,
     BTN_L1, BTN_R1, BTN_L2, BTN_R2,
     BTN_SELECT, BTN_START, BTN_MENU,
+    BTN_L3, BTN_R3, // the two small buttons top-centre on the Brick's face (LEFTSTICK / RIGHTSTICK)
     BTN_COUNT
 };
 const char* kBtnNames[BTN_COUNT] = {
     "UP", "DOWN", "LEFT", "RIGHT", "A", "B", "X", "Y",
-    "L1", "R1", "L2", "R2", "SELECT", "START", "MENU",
+    "L1", "R1", "L2", "R2", "SELECT", "START", "MENU", "L3", "R3",
 };
+constexpr int kTracks = Sequencer::kTracks;
 
 // Eight playable pads in ascending scale order: D-pad first, then face buttons.
 constexpr int kPads = 8;
@@ -87,16 +89,22 @@ struct App {
     float  shownPeak    = 0.0f;
     Uint32 peakResetAt  = 0;
 
-    Synth     synth;
+    Synth     synths[kTracks];
     Sequencer seq;
     Sequencer::RecHandle rec[8]; // per pad, while a recorded note is held
+
+    // Master output for the scope, written by the audio thread.
+    float scope[2048] = {};
+    int   scopePos    = 0;
 
     bool   held[BTN_COUNT]     = {};
     Uint32 repeatAt[BTN_COUNT] = {};
     bool   padDown[kPads]      = {};
 
-    int  preset    = 0;
-    bool edited    = false;
+    int  track     = 0; // selected track: pads, presets, EDIT and recording act on it
+    int  preset[kTracks] = {0, 2, 6, 3};
+    bool edited[kTracks] = {};
+    bool trackUsed = false; // L3 was part of a combo, so its release doesn't step the track
     int  octave    = 4;
     int  scale     = 0;
     int  root      = 0;     // key, 0 = C
@@ -203,9 +211,12 @@ void audioCallback(void* userdata, Uint8* stream, int len) {
     int          frames = total;
     while (frames > 0) {
         int n = std::min(frames, int(a.mono.size()));
-        a.seq.process(a.synth, a.mono.data(), n);
-        for (int i = 0; i < n; ++i)
+        a.seq.process(a.synths, a.mono.data(), n);
+        for (int i = 0; i < n; ++i) {
             for (int c = 0; c < a.channels; ++c) *out++ = a.mono[i];
+            a.scope[a.scopePos] = a.mono[i];
+            a.scopePos          = (a.scopePos + 1) % 2048;
+        }
         frames -= n;
     }
 
@@ -217,28 +228,48 @@ void audioCallback(void* userdata, Uint8* stream, int len) {
 
 // ---------------------------------------------------------------- actions
 
-int padForButton(const App& a, Btn b) {
+Synth& curSynth(App& a) { return a.synths[a.track]; }
+
+int padIndex(Btn b) {
     for (int p = 0; p < kPads; ++p)
-        if (kPadButtons[p] == b) return (p < 4 && a.editMode) ? -1 : p; // D-pad edits params in EDIT mode
+        if (kPadButtons[p] == b) return p;
     return -1;
+}
+
+int padForButton(const App& a, Btn b) {
+    int p = padIndex(b);
+    return (p >= 0 && p < 4 && a.editMode) ? -1 : p; // D-pad edits params in EDIT mode
+}
+
+void releasePad(App& a, int p) {
+    if (!a.padDown[p]) return;
+    curSynth(a).noteOff(p);
+    a.padDown[p] = false;
+    a.seq.finishRecord(a.rec[p]);
+    a.rec[p] = {};
 }
 
 void releaseDpadPads(App& a) {
     AudioLock lock(a.audio);
-    for (int p = 0; p < 4; ++p)
-        if (a.padDown[p]) { a.synth.noteOff(p); a.padDown[p] = false; }
+    for (int p = 0; p < 4; ++p) releasePad(a, p);
 }
 
-void loadPreset(App& a, int index) {
-    a.preset = (index + kPresetCount) % kPresetCount;
+void selectTrack(App& a, int t) {
     AudioLock lock(a.audio);
-    a.synth.params = kPresets[a.preset].params;
-    a.edited       = false;
+    for (int p = 0; p < kPads; ++p) releasePad(a, p); // held notes belong to the old track's synth
+    a.track = (t + kTracks) % kTracks;
+}
+
+void loadPreset(App& a, int t, int index) {
+    a.preset[t] = (index + kPresetCount) % kPresetCount;
+    AudioLock lock(a.audio);
+    a.synths[t].params = kPresets[a.preset[t]].params;
+    a.edited[t]        = false;
 }
 
 void adjustParam(App& a, int dir) {
     AudioLock lock(a.audio);
-    Params& p = a.synth.params;
+    Params& p = curSynth(a).params;
     if (a.paramSel == P_WAVE) {
         int n  = int(Wave::Count);
         p.wave = Wave((int(p.wave) + dir + n) % n);
@@ -249,13 +280,13 @@ void adjustParam(App& a, int dir) {
         float* v = paramValue(p, a.paramSel);
         *v       = std::clamp(*v + dir * 0.02f, 0.0f, 1.0f);
     }
-    a.edited = true;
+    a.edited[a.track] = true;
 }
 
 void togglePlay(App& a) {
     AudioLock lock(a.audio);
     if (a.seq.playing()) {
-        a.seq.stop(a.synth);
+        a.seq.stop(a.synths);
         a.seq.recording = false;
     } else {
         a.seq.start();
@@ -268,22 +299,37 @@ void selectNudge(App& a, Btn b) {
     switch (b) {
     case BTN_LEFT:  a.seq.setBpm(a.seq.bpm() - 1.0f); break;
     case BTN_RIGHT: a.seq.setBpm(a.seq.bpm() + 1.0f); break;
-    case BTN_DOWN:  a.seq.setLength(a.seq.pattern.length - 1); break;
-    case BTN_UP:    a.seq.setLength(a.seq.pattern.length + 1); break;
+    case BTN_DOWN:  a.seq.setLength(a.track, a.seq.patterns[a.track].length - 1); break;
+    case BTN_UP:    a.seq.setLength(a.track, a.seq.patterns[a.track].length + 1); break;
     default: break;
+    }
+}
+
+void toggleRecord(App& a) {
+    AudioLock lock(a.audio);
+    a.seq.recording = !a.seq.recording;
+    if (a.seq.recording && !a.seq.playing()) a.seq.start();
+}
+
+// L3 held: the D-pad pads pick tracks 1-4, the face pads mute them, R1 solos the selected one.
+void onTrackCombo(App& a, Btn b) {
+    int p = padIndex(b);
+    if (p >= 0 && p < 4) {
+        selectTrack(a, p);
+    } else if (p >= 4) {
+        AudioLock lock(a.audio);
+        a.seq.mute[p - 4] = !a.seq.mute[p - 4];
+    } else if (b == BTN_R1) {
+        AudioLock lock(a.audio);
+        a.seq.solo = a.seq.solo == a.track ? -1 : a.track;
     }
 }
 
 void onSelectCombo(App& a, Btn b) {
     switch (b) {
-    case BTN_A: {
-        AudioLock lock(a.audio);
-        a.seq.recording = !a.seq.recording;
-        if (a.seq.recording && !a.seq.playing()) a.seq.start();
-        break;
-    }
-    case BTN_B: { AudioLock lock(a.audio); a.seq.undo(); break; }
-    case BTN_X: { AudioLock lock(a.audio); a.seq.clearPattern(); break; }
+    case BTN_A: toggleRecord(a); break;
+    case BTN_B: { AudioLock lock(a.audio); a.seq.undo(a.track); break; }
+    case BTN_X: { AudioLock lock(a.audio); a.seq.clearPattern(a.track); break; }
     case BTN_Y: a.seq.metronome = !a.seq.metronome; break;
     case BTN_LEFT: case BTN_RIGHT: case BTN_UP: case BTN_DOWN:
         selectNudge(a, b);
@@ -316,20 +362,31 @@ void onPress(App& a, Btn b) {
         onSelectCombo(a, b);
         return;
     }
+    // L3 is the track modifier; tapped on its own it steps to the next track (on release).
+    if (b == BTN_L3) {
+        a.trackUsed = false;
+        return;
+    }
+    if (a.held[BTN_L3]) {
+        a.trackUsed = true;
+        onTrackCombo(a, b);
+        return;
+    }
 
     int pad = padForButton(a, b);
     if (pad >= 0) {
         AudioLock lock(a.audio);
         int note = padMidi(a, pad);
-        a.synth.noteOn(pad, midiHz(note));
+        curSynth(a).noteOn(pad, midiHz(note));
         a.padDown[pad] = true;
-        if (a.seq.recording) a.rec[pad] = a.seq.record(note);
+        if (a.seq.recording) a.rec[pad] = a.seq.record(a.track, note);
         return;
     }
 
     switch (b) {
-    case BTN_L1: loadPreset(a, a.preset - 1); break;
-    case BTN_R1: loadPreset(a, a.preset + 1); break;
+    case BTN_L1: loadPreset(a, a.track, a.preset[a.track] - 1); break;
+    case BTN_R1: loadPreset(a, a.track, a.preset[a.track] + 1); break;
+    case BTN_R3: toggleRecord(a); break;
     case BTN_L2: a.octave = std::max(a.octave - 1, 1); break;
     case BTN_R2: a.octave = std::min(a.octave + 1, 7); break;
     case BTN_START: togglePlay(a); break;
@@ -354,14 +411,14 @@ void onRelease(App& a, Btn b) {
         releaseDpadPads(a);
         return;
     }
-    for (int p = 0; p < kPads; ++p) {
-        if (kPadButtons[p] == b && a.padDown[p]) {
-            AudioLock lock(a.audio);
-            a.synth.noteOff(p);
-            a.padDown[p] = false;
-            a.seq.finishRecord(a.rec[p]);
-            a.rec[p] = {};
-        }
+    if (b == BTN_L3 && !a.trackUsed) {
+        selectTrack(a, a.track + 1);
+        return;
+    }
+    int p = padIndex(b);
+    if (p >= 0 && a.padDown[p]) {
+        AudioLock lock(a.audio);
+        releasePad(a, p);
     }
 }
 
@@ -385,6 +442,8 @@ int keyToBtn(SDL_Scancode sc) {
     case SDL_SCANCODE_C: return BTN_R2;
     case SDL_SCANCODE_TAB: case SDL_SCANCODE_BACKSPACE: return BTN_SELECT;
     case SDL_SCANCODE_RETURN: return BTN_START;
+    case SDL_SCANCODE_T: return BTN_L3;
+    case SDL_SCANCODE_R: return BTN_R3;
     default: return -1;
     }
 }
@@ -404,6 +463,8 @@ int controllerToBtn(Uint8 button) {
     case SDL_CONTROLLER_BUTTON_BACK:          return BTN_SELECT;
     case SDL_CONTROLLER_BUTTON_START:         return BTN_START;
     case SDL_CONTROLLER_BUTTON_GUIDE:         return BTN_MENU;
+    case SDL_CONTROLLER_BUTTON_LEFTSTICK:     return BTN_L3;
+    case SDL_CONTROLLER_BUTTON_RIGHTSTICK:    return BTN_R3;
     default: return -1;
     }
 }
@@ -598,87 +659,128 @@ void drawParams(App& a, const Params& p) {
     }
 }
 
-void drawScope(App& a) {
+// Master output, triggered on a rising zero crossing so periodic waves stand still.
+void drawScope(App& a, int x, int y, int w, int h) {
     SDL_Renderer* r = a.renderer;
-    const int x = 524, y = 184, w = 476, h = kParamRows * 40 + 20;
-    fillRect(r, x, y, w, h, kPanel);
     SDL_SetRenderDrawColor(r, kLine.r, kLine.g, kLine.b, 255);
     SDL_RenderDrawLine(r, x, y + h / 2, x + w - 1, y + h / 2);
-    drawText(r, x + 10, y + 10, 2, "SCOPE", kDim);
 
-    static float buf[Synth::kScopeSize];
+    constexpr int kSize = sizeof(a.scope) / sizeof(a.scope[0]);
+    static float buf[kSize];
     {
         AudioLock lock(a.audio);
-        a.synth.copyScope(buf, Synth::kScopeSize);
+        for (int i = 0; i < kSize; ++i) buf[i] = a.scope[(a.scopePos + i) % kSize];
     }
-    // Trigger on a rising zero crossing so periodic waves stand still.
     const int span = w * 2;
     int start = 0;
-    for (int i = 1; i < Synth::kScopeSize - span; ++i)
+    for (int i = 1; i < kSize - span; ++i)
         if (buf[i - 1] < 0.0f && buf[i] >= 0.0f) { start = i; break; }
 
     std::vector<SDL_Point> pts(w);
     for (int i = 0; i < w; ++i) {
         float s = std::clamp(buf[start + i * 2], -1.0f, 1.0f);
-        pts[i]  = {x + i, y + h / 2 - int(s * (h / 2 - 8))};
+        pts[i]  = {x + i, y + h / 2 - int(s * (h / 2 - 2))};
     }
     SDL_SetRenderDrawColor(r, kScopeC.r, kScopeC.g, kScopeC.b, 255);
     SDL_RenderDrawLines(r, pts.data(), w);
 }
 
-void drawPad(App& a, int pad, int cx, int cy, const char* label) {
-    SDL_Renderer* r = a.renderer;
-    const int w = 110, h = 46;
-    bool disabled = pad < 4 && a.editMode;
-    bool on       = a.padDown[pad];
-    SDL_Color fill = on ? kPlayCol : kPanel;
-    fillRect(r, cx - w / 2, cy - h / 2, w, h, fill);
-    strokeRect(r, cx - w / 2, cy - h / 2, w, h, disabled ? kLine : kDim);
-    SDL_Color tc = on ? kBg : (disabled ? kLine : kText);
-    drawTextCentered(r, cx, cy - 16, 3, disabled ? "PARAM" : noteName(padMidi(a, pad)), tc);
-    drawTextCentered(r, cx, cy + 6, 2, label, on ? kBg : kDim);
-}
-
-void drawPadCluster(App& a, int firstPad, int cx, int cy, const char* labels[4]) {
-    // Pad order within a cluster: left, down, right, up.
-    drawPad(a, firstPad + 0, cx - 120, cy, labels[0]);
-    drawPad(a, firstPad + 1, cx, cy + 52, labels[1]);
-    drawPad(a, firstPad + 2, cx + 120, cy, labels[2]);
-    drawPad(a, firstPad + 3, cx, cy - 52, labels[3]);
-}
-
 struct SeqView {
-    Pattern pattern;
-    int     step;
+    Pattern patterns[kTracks];
+    int     step[kTracks];
+    bool    audible[kTracks];
+    bool    mute[kTracks];
+    int     solo;
     bool    playing, recording, metronome, canUndo;
     float   bpm;
 };
 
-// Transport and a one-row overview of the pattern: a cell per step, lit where notes are.
-void drawSequencer(App& a, const SeqView& v) {
+const SDL_Color kRecCol = {255, 80, 80, 255};
+
+void drawPad(App& a, const SeqView& v, int pad, int cx, int cy, const char* label) {
+    SDL_Renderer* r = a.renderer;
+    const int w = 110, h = 46;
+    std::string text;
+    bool        on, disabled = false;
+    if (a.held[BTN_L3]) { // track modifier: pads become track select / mute
+        text = pad < 4 ? fmt("TRK%d", pad + 1) : fmt("MUTE%d", pad - 3);
+        on   = pad < 4 ? pad == a.track : v.mute[pad - 4];
+    } else {
+        disabled = pad < 4 && a.editMode;
+        text     = disabled ? "PARAM" : noteName(padMidi(a, pad));
+        on       = a.padDown[pad];
+    }
+    SDL_Color onCol = a.held[BTN_L3] ? (pad < 4 ? kAccent : kRecCol) : kPlayCol;
+    fillRect(r, cx - w / 2, cy - h / 2, w, h, on ? onCol : kPanel);
+    strokeRect(r, cx - w / 2, cy - h / 2, w, h, disabled ? kLine : kDim);
+    SDL_Color tc = on ? kBg : (disabled ? kLine : kText);
+    drawTextCentered(r, cx, cy - 16, 3, text, tc);
+    drawTextCentered(r, cx, cy + 6, 2, label, on ? kBg : kDim);
+}
+
+void drawPadCluster(App& a, const SeqView& v, int firstPad, int cx, int cy, const char* labels[4]) {
+    // Pad order within a cluster: left, down, right, up.
+    drawPad(a, v, firstPad + 0, cx - 120, cy, labels[0]);
+    drawPad(a, v, firstPad + 1, cx, cy + 52, labels[1]);
+    drawPad(a, v, firstPad + 2, cx + 120, cy, labels[2]);
+    drawPad(a, v, firstPad + 3, cx, cy - 52, labels[3]);
+}
+
+// One row per track: preset, mute / solo, length, and a cell per step lit where notes are.
+void drawTracks(App& a, const SeqView& v) {
+    SDL_Renderer* r = a.renderer;
+    const int x = 524, y = 184, w = 476, rowH = 75;
+    fillRect(r, x, y, w, rowH * kTracks, kPanel);
+
+    for (int t = 0; t < kTracks; ++t) {
+        const int  ry  = y + t * rowH;
+        const bool sel = t == a.track;
+        if (sel) {
+            fillRect(r, x, ry, w, rowH, {44, 40, 34, 255});
+            fillRect(r, x, ry, 6, rowH, kAccent);
+        }
+        SDL_Color label = !v.audible[t] ? kDim : sel ? kAccent : kText;
+        std::string name = fmt("%d %s%s", t + 1, kPresets[a.preset[t]].name, a.edited[t] ? "*" : "");
+        drawText(r, x + 16, ry + 10, 2, name, label);
+
+        const Pattern& pat = v.patterns[t];
+        std::string    tag = fmt("LEN %d", pat.length);
+        const int      tx  = x + w - 12 - textWidth(tag, 2);
+        drawText(r, tx, ry + 10, 2, tag, kDim);
+        if (v.solo == t) drawText(r, tx - 72, ry + 10, 2, "SOLO", kAccent);
+        else if (v.mute[t]) drawText(r, tx - 72, ry + 10, 2, "MUTE", kRecCol);
+
+        const int gx = x + 16, gw = w - 28, cy = ry + 32, ch = 32;
+        const int len = pat.length;
+        for (int i = 0; i < len; ++i) {
+            int  cx0 = gx + gw * i / len, cx1 = gx + gw * (i + 1) / len;
+            bool has = !pat.steps[i].empty();
+            bool cur = v.playing && i == v.step[t];
+            SDL_Color note = v.audible[t] ? kScopeC : SDL_Color{48, 92, 112, 255};
+            SDL_Color c = cur ? (v.recording && sel ? kRecCol : kAccent)
+                        : has ? note
+                        : (i % 4 == 0 ? kLine : SDL_Color{40, 45, 66, 255});
+            fillRect(r, cx0 + 1, cy, std::max(cx1 - cx0 - 2, 1), ch, c);
+            if (cur && has) fillRect(r, cx0 + 3, cy + 4, std::max(cx1 - cx0 - 6, 1), ch - 8, note);
+        }
+    }
+}
+
+// Transport plus the master scope.
+void drawTransport(App& a, const SeqView& v) {
     SDL_Renderer* r = a.renderer;
     const int x = 24, y = 652, h = 44;
     fillRect(r, x, y, kW - 48, h, kPanel);
 
-    const SDL_Color recCol = {255, 80, 80, 255};
-    const char*     state  = v.recording ? "REC" : v.playing ? "PLAY" : "STOP";
-    SDL_Color       sc     = v.recording ? recCol : v.playing ? kPlayCol : kDim;
+    const char* state = v.recording ? "REC" : v.playing ? "PLAY" : "STOP";
+    SDL_Color   sc    = v.recording ? kRecCol : v.playing ? kPlayCol : kDim;
     drawText(r, x + 10, y + 4, 3, state, sc);
     drawText(r, x + 112, y + 6, 2, fmt("%3d BPM", int(v.bpm + 0.5f)), kText);
-    drawText(r, x + 112, y + 26, 2, fmt("LEN %2d", v.pattern.length), kText);
+    drawText(r, x + 112, y + 26, 2, fmt("TRACK %d", a.track + 1), kText);
     drawText(r, x + 10, y + 28, 2, "CLK", v.metronome ? kText : kLine);
     drawText(r, x + 56, y + 28, 2, "UNDO", v.canUndo ? kText : kLine);
 
-    const int gx = x + 206, gw = kW - 48 - 206 - 8;
-    const int len = v.pattern.length;
-    for (int i = 0; i < len; ++i) {
-        int  cx0 = gx + gw * i / len, cx1 = gx + gw * (i + 1) / len;
-        bool has = !v.pattern.steps[i].empty();
-        bool cur = v.playing && i == v.step;
-        SDL_Color c = cur ? (v.recording ? recCol : kAccent) : has ? kScopeC : (i % 4 == 0 ? kLine : SDL_Color{40, 45, 66, 255});
-        fillRect(r, cx0 + 1, y + 6, cx1 - cx0 - 2, h - 12, c);
-        if (cur && has) fillRect(r, cx0 + 3, y + 10, cx1 - cx0 - 6, h - 20, kScopeC);
-    }
+    drawScope(a, x + 216, y + 2, kW - 48 - 216 - 8, h - 4);
 }
 
 void draw(App& a) {
@@ -688,14 +790,20 @@ void draw(App& a) {
     SeqView sv;
     {
         AudioLock lock(a.audio);
-        p            = a.synth.params;
-        voices       = a.synth.activeVoices();
-        sv.pattern   = a.seq.pattern;
-        sv.step      = a.seq.currentStep();
+        p      = curSynth(a).params;
+        voices = 0;
+        for (int t = 0; t < kTracks; ++t) {
+            voices += a.synths[t].activeVoices();
+            sv.patterns[t] = a.seq.patterns[t];
+            sv.step[t]     = a.seq.currentStep(t);
+            sv.audible[t]  = a.seq.audible(t);
+            sv.mute[t]     = a.seq.mute[t];
+        }
+        sv.solo      = a.seq.solo;
         sv.playing   = a.seq.playing();
         sv.recording = a.seq.recording;
         sv.metronome = a.seq.metronome;
-        sv.canUndo   = a.seq.canUndo();
+        sv.canUndo   = a.seq.canUndo(a.track);
         sv.bpm       = a.seq.bpm();
     }
 
@@ -727,36 +835,38 @@ void draw(App& a) {
     fillRect(r, 680, 42, int(160 * std::min(peak / 100.0f, 1.0f)), 10, lc);
 
     // Preset
-    std::string name = kPresets[a.preset].name;
-    if (a.edited) name += "*";
+    std::string name = kPresets[a.preset[a.track]].name;
+    if (a.edited[a.track]) name += "*";
     drawText(r, 24, 96, 6, "<", kDim);
     drawText(r, kW - 24 - textWidth(">", 6), 96, 6, ">", kDim);
     drawTextCentered(r, kW / 2, 92, 6, name, kText);
-    drawTextCentered(r, kW / 2, 142, 2, fmt("PRESET %d/%d   (L1 / R1)", a.preset + 1, kPresetCount), kDim);
+    drawTextCentered(r, kW / 2, 142, 2, fmt("TRACK %d   PRESET %d/%d   (L1 / R1)", a.track + 1, a.preset[a.track] + 1, kPresetCount), kDim);
 
     drawParams(a, p);
-    drawScope(a);
+    drawTracks(a, sv);
 
     // Pads
     const char* dpadLabels[4] = {"LEFT", "DOWN", "RIGHT", "UP"};
     const char* faceLabels[4] = {"X", "A", "B", "Y"};
-    drawPadCluster(a, 0, 200, 568, dpadLabels);
-    drawPadCluster(a, 4, 824, 568, faceLabels);
+    drawPadCluster(a, sv, 0, 200, 568, dpadLabels);
+    drawPadCluster(a, sv, 4, 824, 568, faceLabels);
 
     drawTextCentered(r, kW / 2, 520, 3, fmt("OCT %d", a.octave), kText);
     drawTextCentered(r, kW / 2, 560, 3, fmt("%s %s", kNoteNames[a.root], kScales[a.scale].name), kText);
     drawTextCentered(r, kW / 2, 600, 3, fmt("VOICES %d", voices), voices ? kPlayCol : kDim);
     if (!a.audio) drawTextCentered(r, kW / 2, 494, 3, "NO AUDIO", {255, 80, 80, 255});
 
-    drawSequencer(a, sv);
+    drawTransport(a, sv);
 
     // Footer
     fillRect(r, 0, kH - 64, kW, 64, kPanel);
-    // While SELECT is held, list what it combines with.
+    // While a modifier is held, list what it combines with.
     if (a.held[BTN_SELECT])
         drawText(r, 16, kH - 54, 2, "+A:REC +B:UNDO +X:CLEAR +Y:CLICK +</>:BPM +UP/DN:LEN +L1/R1:SCALE +L2/R2:KEY", kAccent);
+    else if (a.held[BTN_L3])
+        drawText(r, 16, kH - 54, 2, "L3 + D-PAD:SELECT TRACK  + X/A/B/Y:MUTE  + R1:SOLO  (TAP L3:NEXT TRACK)", kAccent);
     else
-        drawText(r, 16, kH - 54, 2, "START:PLAY  SELECT:EDIT (HOLD:MORE)  L1/R1:PRESET  L2/R2:OCT  SEL+START:QUIT", kDim);
+        drawText(r, 16, kH - 54, 2, "START:PLAY R3:REC L3:TRACK SELECT:EDIT/MORE L1/R1:PRESET L2/R2:OCT", kDim);
     std::string in = "IN: " + a.lastInput;
     if (in.size() > 84) in.resize(84);
     drawText(r, 16, kH - 26, 2, in, kText);
@@ -821,16 +931,16 @@ int main(int argc, char* argv[]) {
         a.channels   = have.channels;
         a.sampleRate = have.freq;
         a.mono.resize(std::max<int>(have.samples, 512));
-        a.synth.init(have.freq);
+        for (Synth& s : a.synths) s.init(have.freq);
         a.seq.init(have.freq);
         a.seq.latencyFrames = have.samples;
         SDL_Log("audio: %d Hz, %d ch, %d samples", have.freq, have.channels, have.samples);
     } else {
         SDL_Log("SDL_OpenAudioDevice failed: %s", SDL_GetError());
-        a.synth.init(48000);
+        for (Synth& s : a.synths) s.init(48000);
         a.seq.init(48000);
     }
-    loadPreset(a, 0);
+    for (int t = 0; t < kTracks; ++t) loadPreset(a, t, a.preset[t]);
     if (a.audio) SDL_PauseAudioDevice(a.audio, 0);
 
     while (!a.quit) {

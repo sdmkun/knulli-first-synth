@@ -83,6 +83,7 @@ void Synth::init(int sampleRate) {
     delayBuf_.assign(static_cast<size_t>(sampleRate_ * delaySec(1.0f)) + 4, 0.0f);
     delayWrite_  = 0;
     delaySmooth_ = -1.0f;
+    silentRun_   = 0;
 }
 
 void Synth::noteOn(int key, float freq) {
@@ -168,6 +169,13 @@ void Synth::render(float* out, int frames) {
     const float feedback    = delayFeedbackGain(p.delayFeedback);
     if (delaySmooth_ < 0.0f) delaySmooth_ = delayTarget;
 
+    // Idle: no voices and the delay line has held only silence for a full lap.
+    if (silentRun_ >= delaySize && activeVoices() == 0) {
+        std::fill(out, out + frames, 0.0f);
+        lfoPhase_ = wrap01(lfoPhase_ + lfoInc * frames);
+        return;
+    }
+
     for (int start = 0; start < frames; start += kBlock) {
         const int n = std::min(kBlock, frames - start);
 
@@ -238,21 +246,11 @@ void Synth::render(float* out, int frames) {
             const float frac = rp - float(i0);
             const float wet  = delayBuf_[i0] + (delayBuf_[i1] - delayBuf_[i0]) * frac;
             delayBuf_[delayWrite_] = dry + wet * feedback;
+            silentRun_ = std::fabs(delayBuf_[delayWrite_]) > 1e-5f ? 0 : silentRun_ + 1;
             delayWrite_ = (delayWrite_ + 1) % delaySize;
 
             const float y = std::tanh(dry + wet * p.delayMix); // gentle limiter for chords / resonance
             out[start + i] = y;
-            scope_[scopePos_] = y;
-            scopePos_ = (scopePos_ + 1) % kScopeSize;
         }
-    }
-}
-
-void Synth::copyScope(float* dst, int count) const {
-    count = std::min(count, kScopeSize);
-    int pos = (scopePos_ - count + kScopeSize) % kScopeSize;
-    for (int i = 0; i < count; ++i) {
-        dst[i] = scope_[pos];
-        pos = (pos + 1) % kScopeSize;
     }
 }

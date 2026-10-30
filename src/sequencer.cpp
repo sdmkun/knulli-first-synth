@@ -9,6 +9,12 @@ namespace {
 constexpr float kPi = 3.14159265358979f;
 
 float midiToHz(int m) { return 440.0f * std::pow(2.0f, (m - 69) / 12.0f); }
+
+// Cheap tanh-like soft clip for the master bus.
+float softClip(float x) {
+    x = std::clamp(x, -3.0f, 3.0f);
+    return x * (27.0f + x * x) / (27.0f + 9.0f * x * x);
+}
 } // namespace
 
 bool SeqStep::empty() const {
@@ -21,69 +27,89 @@ void Pattern::clear() {
     for (SeqStep& s : steps) s = SeqStep{};
 }
 
-void Sequencer::init(int sampleRate) { sampleRate_ = sampleRate; }
+void Sequencer::init(int sampleRate) {
+    sampleRate_ = sampleRate;
+    trackBuf_.assign(1024, 0.0f);
+    std::fill(std::begin(step_), std::end(step_), -1);
+}
 
 double Sequencer::samplesPerStep() const { return sampleRate_ * 60.0 / bpm_ / 4.0; }
 
 void Sequencer::setBpm(float bpm) { bpm_ = std::clamp(bpm, 40.0f, 240.0f); }
 
-void Sequencer::setLength(int steps) { pattern.length = std::clamp(steps, 1, Pattern::kMaxSteps); }
+void Sequencer::setLength(int track, int steps) {
+    patterns[track].length = std::clamp(steps, 1, Pattern::kMaxSteps);
+}
 
 void Sequencer::start() {
-    playing_   = true;
-    step_      = -1;
+    playing_ = true;
+    std::fill(std::begin(step_), std::end(step_), -1);
     absStep_   = -1;
     untilStep_ = 0.0; // fire step 0 on the next sample
 }
 
-void Sequencer::stop(Synth& synth) {
+void Sequencer::stop(Synth* synths) {
     playing_ = false;
-    step_    = -1;
-    releaseAll(synth);
-    clearFresh();
+    std::fill(std::begin(step_), std::end(step_), -1);
+    for (int t = 0; t < kTracks; ++t) {
+        releaseTrack(synths[t], t);
+        clearFresh(t);
+    }
 }
 
-void Sequencer::releaseAll(Synth& synth) {
-    for (Active& a : active_) {
+void Sequencer::releaseTrack(Synth& synth, int track) {
+    for (Active& a : active_[track]) {
         if (a.key >= 0) synth.noteOff(a.key);
         a = Active{};
     }
 }
 
-void Sequencer::clearFresh() {
-    for (SeqStep& s : pattern.steps)
+void Sequencer::clearFresh(int track) {
+    for (SeqStep& s : patterns[track].steps)
         for (SeqNote& n : s.notes) n.fresh = false;
 }
 
-void Sequencer::fireStep(Synth& synth) {
-    step_ = (step_ + 1) % pattern.length;
+void Sequencer::fireStep(Synth* synths) {
     ++absStep_;
-    if (step_ == 0) ++passId_;
+    for (int t = 0; t < kTracks; ++t) {
+        Pattern& pat   = patterns[t];
+        Synth&   synth = synths[t];
+        step_[t]       = (step_[t] + 1) % pat.length;
+        if (step_[t] == 0) ++passId_[t];
 
-    for (Active& a : active_) {
-        if (a.key >= 0 && --a.remaining <= 0) {
-            synth.noteOff(a.key);
-            a = Active{};
+        if (!audible(t)) {
+            releaseTrack(synth, t);
+            clearFresh(t);
+            continue;
         }
-    }
 
-    for (SeqNote& n : pattern.steps[step_].notes) {
-        if (n.pitch < 0) continue;
-        if (n.fresh) { n.fresh = false; continue; }
-        // Free slot, else steal the one closest to ending.
-        int slot = 0;
+        Active* active = active_[t];
         for (int i = 0; i < kMaxActive; ++i) {
-            if (active_[i].key < 0) { slot = i; break; }
-            if (active_[i].remaining < active_[slot].remaining) slot = i;
+            if (active[i].key >= 0 && --active[i].remaining <= 0) {
+                synth.noteOff(active[i].key);
+                active[i] = Active{};
+            }
         }
-        if (active_[slot].key >= 0) synth.noteOff(active_[slot].key);
-        active_[slot] = {kKeyBase + slot, n.len};
-        synth.noteOn(kKeyBase + slot, midiToHz(n.pitch));
+
+        for (SeqNote& n : pat.steps[step_[t]].notes) {
+            if (n.pitch < 0) continue;
+            if (n.fresh) { n.fresh = false; continue; }
+            // Free slot, else steal the one closest to ending.
+            int slot = 0;
+            for (int i = 0; i < kMaxActive; ++i) {
+                if (active[i].key < 0) { slot = i; break; }
+                if (active[i].remaining < active[slot].remaining) slot = i;
+            }
+            if (active[slot].key >= 0) synth.noteOff(active[slot].key);
+            active[slot] = {kKeyBase + slot, n.len};
+            synth.noteOn(kKeyBase + slot, midiToHz(n.pitch));
+        }
     }
 
-    if (recording && metronome && step_ % 4 == 0) {
+    // The click follows the global beat so it stays steady under polymeters.
+    if (recording && metronome && absStep_ % 4 == 0) {
         clickPos_    = 0;
-        clickAccent_ = step_ == 0;
+        clickAccent_ = absStep_ % 16 == 0;
         clickPhase_  = 0.0f;
     }
 }
@@ -101,17 +127,25 @@ void Sequencer::mixClick(float* out, int frames) {
     if (clickPos_ >= len) clickPos_ = -1;
 }
 
-void Sequencer::process(Synth& synth, float* out, int frames) {
+void Sequencer::process(Synth* synths, float* out, int frames) {
     int done = 0;
     while (done < frames) {
         if (playing_ && untilStep_ <= 0.0) {
-            fireStep(synth);
+            fireStep(synths);
             untilStep_ += samplesPerStep();
         }
-        int n = frames - done;
+        int n = std::min(frames - done, int(trackBuf_.size()));
         if (playing_) n = std::clamp(int(std::ceil(untilStep_)), 1, n);
-        synth.render(out + done, n);
-        mixClick(out + done, n);
+
+        float* o = out + done;
+        std::fill(o, o + n, 0.0f);
+        for (int t = 0; t < kTracks; ++t) {
+            synths[t].render(trackBuf_.data(), n);
+            for (int i = 0; i < n; ++i) o[i] += trackBuf_[i];
+        }
+        for (int i = 0; i < n; ++i) o[i] = softClip(o[i] * 0.8f);
+        mixClick(o, n);
+
         if (playing_) untilStep_ -= n;
         done += n;
     }
@@ -122,25 +156,25 @@ double Sequencer::heardPosition() const {
     return double(absStep_) + (1.0 - untilStep_ / sps) - latencyFrames / sps;
 }
 
-void Sequencer::snapshotForUndo() {
-    if (undoPass_ == passId_ && hasUndo_) return; // one undo level per overdub pass
-    undo_     = pattern;
-    hasUndo_  = true;
-    undoPass_ = passId_;
+void Sequencer::snapshotForUndo(int track) {
+    Undo& u = undo_[track];
+    if (u.has && u.pass == passId_[track]) return; // one undo level per overdub pass
+    u.pattern = patterns[track];
+    u.has     = true;
+    u.pass    = passId_[track];
 }
 
-Sequencer::RecHandle Sequencer::record(int pitch) {
+Sequencer::RecHandle Sequencer::record(int track, int pitch) {
     RecHandle h;
-    if (!playing_ || step_ < 0 || pitch < 0 || pitch > 127) return h;
+    if (!playing_ || step_[track] < 0 || pitch < 0 || pitch > 127) return h;
 
-    const double pos     = heardPosition();
-    const long   nearest = std::lround(pos);
-    const int    offset  = int(nearest - absStep_); // -1, 0 or +1
-    const int    len     = pattern.length;
-    const int    step    = ((step_ + offset) % len + len) % len;
+    const long nearest = std::lround(heardPosition());
+    const int  offset  = int(nearest - absStep_); // -1, 0 or +1
+    const int  len     = patterns[track].length;
+    const int  step    = ((step_[track] + offset) % len + len) % len;
 
-    snapshotForUndo();
-    SeqStep& s    = pattern.steps[step];
+    snapshotForUndo(track);
+    SeqStep& s    = patterns[track].steps[step];
     int      slot = -1;
     for (int i = 0; i < SeqStep::kMaxNotes && slot < 0; ++i)
         if (s.notes[i].pitch == pitch) slot = i; // same pitch again: overwrite
@@ -150,6 +184,7 @@ Sequencer::RecHandle Sequencer::record(int pitch) {
 
     // Not fired yet this pass, but already heard live: skip it once.
     s.notes[slot] = {int8_t(pitch), 1, offset > 0};
+    h.track = track;
     h.step  = step;
     h.slot  = slot;
     h.pitch = pitch;
@@ -158,25 +193,29 @@ Sequencer::RecHandle Sequencer::record(int pitch) {
 }
 
 void Sequencer::finishRecord(const RecHandle& h) {
-    if (h.step < 0 || h.step >= pattern.length) return;
-    SeqNote& n = pattern.steps[h.step].notes[h.slot];
+    if (h.track < 0) return;
+    Pattern& pat = patterns[h.track];
+    if (h.step >= pat.length) return;
+    SeqNote& n = pat.steps[h.step].notes[h.slot];
     if (n.pitch != h.pitch) return; // undone or cleared meanwhile
     long steps = std::lround(heardPosition() - h.start);
-    n.len      = uint8_t(std::clamp<long>(steps, 1, pattern.length));
+    n.len      = uint8_t(std::clamp<long>(steps, 1, pat.length));
 }
 
-void Sequencer::undo() {
-    if (!hasUndo_) return;
-    pattern  = undo_;
-    hasUndo_ = false;
-    clearFresh();
+void Sequencer::undo(int track) {
+    Undo& u = undo_[track];
+    if (!u.has) return;
+    patterns[track] = u.pattern;
+    u.has           = false;
+    clearFresh(track);
 }
 
-void Sequencer::clearPattern() {
-    undo_     = pattern;
-    hasUndo_  = true;
-    undoPass_ = -1; // the next recording takes its own snapshot
-    int len   = pattern.length;
-    pattern.clear();
-    pattern.length = len;
+void Sequencer::clearPattern(int track) {
+    Undo& u   = undo_[track];
+    u.pattern = patterns[track];
+    u.has     = true;
+    u.pass    = -1; // the next recording takes its own snapshot
+    int len   = patterns[track].length;
+    patterns[track].clear();
+    patterns[track].length = len;
 }

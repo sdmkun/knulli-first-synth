@@ -53,9 +53,8 @@ float delayFeedbackGain(float n);
 
 class Synth {
 public:
-    static constexpr int kVoices    = 8;
-    static constexpr int kScopeSize = 2048;
-    static constexpr int kBlock     = 16; // control-rate interval for envelopes/LFO/filter coefficients
+    static constexpr int kVoices = 8;
+    static constexpr int kBlock  = 16; // control-rate interval for envelopes/LFO/filter coefficients
 
     void init(int sampleRate);
 
@@ -68,8 +67,6 @@ public:
     void render(float* out, int frames);
 
     int  activeVoices() const;
-    // Copies the most recent output into dst (oldest first). Lock audio first.
-    void copyScope(float* dst, int count) const;
 
     Params params;
 
@@ -97,7 +94,5 @@ private:
     std::vector<float> delayBuf_;
     int      delayWrite_ = 0;
     float    delaySmooth_ = -1.0f; // current delay length in samples, glides toward the target
-
-    float    scope_[kScopeSize] = {};
-    int      scopePos_   = 0;
+    int      silentRun_   = 0;     // consecutive silent samples written to the delay line
 };
