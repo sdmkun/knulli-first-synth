@@ -16,7 +16,7 @@ $out = Join-Path $root 'build\windows'
 New-Item -ItemType Directory -Force $out | Out-Null
 
 & g++ -O2 -std=c++17 -Wall -Wextra `
-    (Join-Path $root 'src\main.cpp') (Join-Path $root 'src\synth.cpp') `
+    (Join-Path $root 'src\main.cpp') (Join-Path $root 'src\synth.cpp') (Join-Path $root 'src\sequencer.cpp') `
     "-I$sdl\include\SDL2" "-L$sdl\lib" `
     -lmingw32 -lSDL2main -lSDL2 -static-libgcc -static-libstdc++ `
     -o (Join-Path $out 'ksynth.exe')

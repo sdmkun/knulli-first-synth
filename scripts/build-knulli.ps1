@@ -8,7 +8,7 @@ docker build -t $image (Join-Path $root 'docker')
 if ($LASTEXITCODE -ne 0) { throw "docker build failed" }
 
 $cmd = 'mkdir -p build/knulli && aarch64-linux-gnu-g++ -O2 -std=c++17 -Wall -Wextra ' +
-       '-mcpu=cortex-a53 src/main.cpp src/synth.cpp ' +
+       '-mcpu=cortex-a53 src/main.cpp src/synth.cpp src/sequencer.cpp ' +
        '-I/usr/include/SDL2 -I/usr/include/aarch64-linux-gnu/SDL2 -D_REENTRANT ' +
        '-L/usr/lib/aarch64-linux-gnu -lSDL2 -static-libgcc -static-libstdc++ ' +
        '-o build/knulli/ksynth'
