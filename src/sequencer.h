@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <vector>
 
-class Synth;
+class Instrument;
 
 // One note on a step. Lengths are in steps; the note is released when they run out.
 struct SeqNote {
@@ -27,12 +27,12 @@ struct Pattern {
 
 // Multi-track step sequencer driven from the audio thread so steps land
 // sample-accurately. Each track owns a pattern (with its own length, so tracks
-// can run as a polymeter) and plays one Synth. Everything except process() is
-// for the UI thread and must be called with the audio device locked.
+// can run as a polymeter) and plays one Instrument. Everything except
+// process() is for the UI thread and must be called with the audio device locked.
 class Sequencer {
 public:
     static constexpr int kTracks    = 4;
-    static constexpr int kKeyBase   = 100; // synth keys for sequenced notes; pads use 0..7
+    static constexpr int kKeyBase   = 100; // instrument keys for sequenced notes; pads use 0..7
     static constexpr int kMaxActive = 16;  // sounding sequenced notes per track
 
     // Where a recorded note was placed, so its length can be set on release.
@@ -46,12 +46,12 @@ public:
 
     void init(int sampleRate);
 
-    // Audio thread: renders and mixes all track synths (plus metronome) into
-    // `out`, firing steps on time. `synths` holds kTracks synths.
-    void process(Synth* synths, float* out, int frames);
+    // Audio thread: renders and mixes every track's instrument (plus metronome)
+    // into `out`, firing steps on time. `inst` holds kTracks instruments.
+    void process(Instrument* const* inst, float* out, int frames);
 
     void start();
-    void stop(Synth* synths);
+    void stop(Instrument* const* inst);
     bool playing() const { return playing_; }
     int  currentStep(int track) const { return step_[track]; }
 
@@ -92,8 +92,8 @@ private:
 
     double samplesPerStep() const;
     double heardPosition() const; // absolute steps, latency compensated
-    void   fireStep(Synth* synths);
-    void   releaseTrack(Synth& synth, int track);
+    void   fireStep(Instrument* const* inst);
+    void   releaseTrack(Instrument& inst, int track);
     void   snapshotForUndo(int track);
     void   clearFresh(int track);
     void   mixClick(float* out, int frames);

@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "instrument.h"
+
 // Oscillator shapes selectable from the UI.
 enum class Wave { Sine, Triangle, Saw, Square, Pulse25, Noise, Count };
 
@@ -51,22 +53,18 @@ float lfoHz(float n);
 float delaySec(float n);
 float delayFeedbackGain(float n);
 
-class Synth {
+class Synth : public Instrument {
 public:
     static constexpr int kVoices = 8;
     static constexpr int kBlock  = 16; // control-rate interval for envelopes/LFO/filter coefficients
 
     void init(int sampleRate);
 
-    // `key` identifies the physical pad so a release finds the right voice.
-    void noteOn(int key, float freq);
-    void noteOff(int key);
-    void allOff();
-
-    // Renders mono samples. Called from the audio thread.
-    void render(float* out, int frames);
-
-    int  activeVoices() const;
+    void noteOn(int key, int note) override;
+    void noteOff(int key) override;
+    void allOff() override;
+    void render(float* out, int frames) override;
+    int  activeVoices() const override;
 
     Params params;
 

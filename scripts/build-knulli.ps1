@@ -8,7 +8,7 @@ docker build -t $image (Join-Path $root 'docker')
 if ($LASTEXITCODE -ne 0) { throw "docker build failed" }
 
 $cmd = 'mkdir -p build/knulli && aarch64-linux-gnu-g++ -O2 -std=c++17 -Wall -Wextra ' +
-       '-mcpu=cortex-a53 src/main.cpp src/synth.cpp src/sequencer.cpp ' +
+       '-mcpu=cortex-a53 src/main.cpp src/synth.cpp src/sequencer.cpp src/drumkit.cpp ' +
        '-I/usr/include/SDL2 -I/usr/include/aarch64-linux-gnu/SDL2 -D_REENTRANT ' +
        '-L/usr/lib/aarch64-linux-gnu -lSDL2 -static-libgcc -static-libstdc++ ' +
        '-o build/knulli/ksynth'
@@ -19,6 +19,8 @@ $dist = Join-Path $root 'dist\ports'
 $app = Join-Path $dist 'knulli-first-synth'
 New-Item -ItemType Directory -Force $app | Out-Null
 Copy-Item (Join-Path $root 'build\knulli\ksynth') $app -Force
+# Bundled drum kits; your own kits can be added next to them on the device.
+Copy-Item (Join-Path $root 'samples') $app -Recurse -Force
 Copy-Item (Join-Path $root 'package\KnulliFirstSynth.sh') $dist -Force
 Copy-Item (Join-Path $root 'package\KnulliFirstSynth.sh.keys') $dist -Force
 

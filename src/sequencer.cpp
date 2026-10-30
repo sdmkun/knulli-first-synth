@@ -3,12 +3,10 @@
 #include <algorithm>
 #include <cmath>
 
-#include "synth.h"
+#include "instrument.h"
 
 namespace {
 constexpr float kPi = 3.14159265358979f;
-
-float midiToHz(int m) { return 440.0f * std::pow(2.0f, (m - 69) / 12.0f); }
 
 // Cheap tanh-like soft clip for the master bus.
 float softClip(float x) {
@@ -48,18 +46,18 @@ void Sequencer::start() {
     untilStep_ = 0.0; // fire step 0 on the next sample
 }
 
-void Sequencer::stop(Synth* synths) {
+void Sequencer::stop(Instrument* const* inst) {
     playing_ = false;
     std::fill(std::begin(step_), std::end(step_), -1);
     for (int t = 0; t < kTracks; ++t) {
-        releaseTrack(synths[t], t);
+        releaseTrack(*inst[t], t);
         clearFresh(t);
     }
 }
 
-void Sequencer::releaseTrack(Synth& synth, int track) {
+void Sequencer::releaseTrack(Instrument& inst, int track) {
     for (Active& a : active_[track]) {
-        if (a.key >= 0) synth.noteOff(a.key);
+        if (a.key >= 0) inst.noteOff(a.key);
         a = Active{};
     }
 }
@@ -69,16 +67,16 @@ void Sequencer::clearFresh(int track) {
         for (SeqNote& n : s.notes) n.fresh = false;
 }
 
-void Sequencer::fireStep(Synth* synths) {
+void Sequencer::fireStep(Instrument* const* inst) {
     ++absStep_;
     for (int t = 0; t < kTracks; ++t) {
-        Pattern& pat   = patterns[t];
-        Synth&   synth = synths[t];
-        step_[t]       = (step_[t] + 1) % pat.length;
+        Pattern&    pat   = patterns[t];
+        Instrument& track = *inst[t];
+        step_[t]          = (step_[t] + 1) % pat.length;
         if (step_[t] == 0) ++passId_[t];
 
         if (!audible(t)) {
-            releaseTrack(synth, t);
+            releaseTrack(track, t);
             clearFresh(t);
             continue;
         }
@@ -86,7 +84,7 @@ void Sequencer::fireStep(Synth* synths) {
         Active* active = active_[t];
         for (int i = 0; i < kMaxActive; ++i) {
             if (active[i].key >= 0 && --active[i].remaining <= 0) {
-                synth.noteOff(active[i].key);
+                track.noteOff(active[i].key);
                 active[i] = Active{};
             }
         }
@@ -100,9 +98,9 @@ void Sequencer::fireStep(Synth* synths) {
                 if (active[i].key < 0) { slot = i; break; }
                 if (active[i].remaining < active[slot].remaining) slot = i;
             }
-            if (active[slot].key >= 0) synth.noteOff(active[slot].key);
+            if (active[slot].key >= 0) track.noteOff(active[slot].key);
             active[slot] = {kKeyBase + slot, n.len};
-            synth.noteOn(kKeyBase + slot, midiToHz(n.pitch));
+            track.noteOn(kKeyBase + slot, n.pitch);
         }
     }
 
@@ -127,11 +125,11 @@ void Sequencer::mixClick(float* out, int frames) {
     if (clickPos_ >= len) clickPos_ = -1;
 }
 
-void Sequencer::process(Synth* synths, float* out, int frames) {
+void Sequencer::process(Instrument* const* inst, float* out, int frames) {
     int done = 0;
     while (done < frames) {
         if (playing_ && untilStep_ <= 0.0) {
-            fireStep(synths);
+            fireStep(inst);
             untilStep_ += samplesPerStep();
         }
         int n = std::min(frames - done, int(trackBuf_.size()));
@@ -140,7 +138,7 @@ void Sequencer::process(Synth* synths, float* out, int frames) {
         float* o = out + done;
         std::fill(o, o + n, 0.0f);
         for (int t = 0; t < kTracks; ++t) {
-            synths[t].render(trackBuf_.data(), n);
+            inst[t]->render(trackBuf_.data(), n);
             for (int i = 0; i < n; ++i) o[i] += trackBuf_[i];
         }
         for (int i = 0; i < n; ++i) o[i] = softClip(o[i] * 0.8f);

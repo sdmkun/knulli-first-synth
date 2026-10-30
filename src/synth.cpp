@@ -110,7 +110,8 @@ void Synth::init(int sampleRate) {
     silentRun_   = 0;
 }
 
-void Synth::noteOn(int key, float freq) {
+void Synth::noteOn(int key, int note) {
+    const float freq = 440.0f * std::pow(2.0f, (note - 69) / 12.0f);
     Voice* target = nullptr;
     for (Voice& v : voices_)
         if (v.key == key) target = &v;

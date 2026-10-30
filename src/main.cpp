@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "drumkit.h"
 #include "font.h"
 #include "sequencer.h"
 #include "synth.h"
@@ -89,8 +90,15 @@ struct App {
     float  shownPeak    = 0.0f;
     Uint32 peakResetAt  = 0;
 
-    Synth     synths[kTracks];
-    Sequencer seq;
+    // Each track has both instruments; inst[] points at the one it plays.
+    Synth       synths[kTracks];
+    DrumKit     drums[kTracks];
+    Instrument* inst[kTracks] = {};
+    bool        isDrum[kTracks] = {};
+    std::vector<Kit> kits; // loaded once at startup, never changed afterwards
+    int         kit[kTracks]     = {};
+    int         drumPad[kTracks] = {}; // pad whose settings EDIT shows on a drum track
+    Sequencer   seq;
     Sequencer::RecHandle rec[8]; // per pad, while a recorded note is held
 
     // Master output for the scope, written by the audio thread.
@@ -138,11 +146,10 @@ std::string fmt(const char* f, ...) {
 }
 
 int padMidi(const App& a, int pad) {
+    if (a.isDrum[a.track]) return DrumKit::kBaseNote + pad;
     const Scale& s = kScales[a.scale];
     return 12 * (a.octave + 1) + a.root + s.steps[pad % s.count] + 12 * (pad / s.count);
 }
-
-float midiHz(int m) { return 440.0f * std::pow(2.0f, (m - 69) / 12.0f); }
 
 const char* kNoteNames[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 
@@ -211,7 +218,7 @@ void audioCallback(void* userdata, Uint8* stream, int len) {
     int          frames = total;
     while (frames > 0) {
         int n = std::min(frames, int(a.mono.size()));
-        a.seq.process(a.synths, a.mono.data(), n);
+        a.seq.process(a.inst, a.mono.data(), n);
         for (int i = 0; i < n; ++i) {
             for (int c = 0; c < a.channels; ++c) *out++ = a.mono[i];
             a.scope[a.scopePos] = a.mono[i];
@@ -228,7 +235,13 @@ void audioCallback(void* userdata, Uint8* stream, int len) {
 
 // ---------------------------------------------------------------- actions
 
-Synth& curSynth(App& a) { return a.synths[a.track]; }
+Instrument& curInst(App& a) { return *a.inst[a.track]; }
+
+// Preset name (with * when edited), or the kit name on a drum track.
+std::string trackName(const App& a, int t) {
+    if (a.isDrum[t]) return "KIT " + a.kits[a.kit[t]].name;
+    return std::string(kPresets[a.preset[t]].name) + (a.edited[t] ? "*" : "");
+}
 
 int padIndex(Btn b) {
     for (int p = 0; p < kPads; ++p)
@@ -243,7 +256,7 @@ int padForButton(const App& a, Btn b) {
 
 void releasePad(App& a, int p) {
     if (!a.padDown[p]) return;
-    curSynth(a).noteOff(p);
+    curInst(a).noteOff(p);
     a.padDown[p] = false;
     a.seq.finishRecord(a.rec[p]);
     a.rec[p] = {};
@@ -256,7 +269,7 @@ void releaseDpadPads(App& a) {
 
 void selectTrack(App& a, int t) {
     AudioLock lock(a.audio);
-    for (int p = 0; p < kPads; ++p) releasePad(a, p); // held notes belong to the old track's synth
+    for (int p = 0; p < kPads; ++p) releasePad(a, p); // held notes belong to the old track's instrument
     a.track = (t + kTracks) % kTracks;
 }
 
@@ -267,9 +280,83 @@ void loadPreset(App& a, int t, int index) {
     a.edited[t]        = false;
 }
 
+void loadKit(App& a, int t, int index) {
+    if (a.kits.empty()) return;
+    int n    = int(a.kits.size());
+    a.kit[t] = (index % n + n) % n;
+    AudioLock lock(a.audio);
+    a.drums[t].setKit(&a.kits[a.kit[t]]);
+}
+
+// Switches the track between SYNTH and DRUM; needs at least one kit on disk.
+void setTrackType(App& a, int t, bool drum) {
+    if (drum && a.kits.empty()) {
+        a.lastInput = "NO DRUM KITS FOUND IN SAMPLES/KITS";
+        return;
+    }
+    AudioLock lock(a.audio);
+    if (t == a.track)
+        for (int p = 0; p < kPads; ++p) releasePad(a, p);
+    a.inst[t]->allOff();
+    a.isDrum[t] = drum;
+    a.inst[t]   = drum ? static_cast<Instrument*>(&a.drums[t]) : &a.synths[t];
+}
+
+// ---- EDIT parameters: the synth's list, or the selected pad's settings on a drum track.
+
+enum DrumParamId { D_PAD, D_PITCH, D_START, D_END, D_VOLUME, D_COUNT };
+const char* kDrumParamNames[D_COUNT] = {"PAD", "PITCH", "START", "END", "VOLUME"};
+
+int paramCount(const App& a) { return a.isDrum[a.track] ? int(D_COUNT) : int(P_COUNT); }
+
+struct ParamRow {
+    std::string name, value;
+    float       norm;
+};
+
+// Snapshot of the visible parameter list. Lock audio first.
+std::vector<ParamRow> paramRows(App& a) {
+    std::vector<ParamRow> rows;
+    const int t = a.track;
+    if (!a.isDrum[t]) {
+        const Params& p = a.synths[t].params;
+        for (int i = 0; i < P_COUNT; ++i) rows.push_back({kParamNames[i], paramText(p, i), paramNorm(p, i)});
+        return rows;
+    }
+    const int                     pad = a.drumPad[t];
+    const DrumKit::PadSettings&   ps  = a.drums[t].pads[pad];
+    const Kit*                    kit = a.drums[t].kit();
+    std::string                   name = kit ? kit->pads[pad].name : "";
+    if (name.size() > 7) name.resize(7); // fits the value column
+    rows.push_back({kDrumParamNames[D_PAD], fmt("%d %s", pad + 1, name.c_str()), pad / float(kPads - 1)});
+    rows.push_back({kDrumParamNames[D_PITCH], fmt("%+dST", ps.pitch), (ps.pitch + 24) / 48.0f});
+    rows.push_back({kDrumParamNames[D_START], percent(ps.start), ps.start});
+    rows.push_back({kDrumParamNames[D_END], percent(ps.end), ps.end});
+    rows.push_back({kDrumParamNames[D_VOLUME], percent(ps.volume), ps.volume});
+    return rows;
+}
+
+void adjustDrumParam(App& a, int dir) {
+    const int             t  = a.track;
+    DrumKit::PadSettings& ps = a.drums[t].pads[a.drumPad[t]];
+    switch (a.paramSel) {
+    case D_PAD:    a.drumPad[t] = (a.drumPad[t] + dir + kPads) % kPads; break;
+    case D_PITCH:  ps.pitch = std::clamp(ps.pitch + dir, -24, 24); break;
+    case D_START:  ps.start = std::clamp(ps.start + dir * 0.01f, 0.0f, ps.end - 0.01f); break;
+    case D_END:    ps.end = std::clamp(ps.end + dir * 0.01f, ps.start + 0.01f, 1.0f); break;
+    case D_VOLUME: ps.volume = std::clamp(ps.volume + dir * 0.02f, 0.0f, 1.0f); break;
+    default: break;
+    }
+}
+
 void adjustParam(App& a, int dir) {
     AudioLock lock(a.audio);
-    Params& p = curSynth(a).params;
+    a.paramSel = std::min(a.paramSel, paramCount(a) - 1);
+    if (a.isDrum[a.track]) {
+        adjustDrumParam(a, dir);
+        return;
+    }
+    Params& p = a.synths[a.track].params;
     if (a.paramSel == P_WAVE) {
         int n  = int(Wave::Count);
         p.wave = Wave((int(p.wave) + dir + n) % n);
@@ -286,7 +373,7 @@ void adjustParam(App& a, int dir) {
 void togglePlay(App& a) {
     AudioLock lock(a.audio);
     if (a.seq.playing()) {
-        a.seq.stop(a.synths);
+        a.seq.stop(a.inst);
         a.seq.recording = false;
     } else {
         a.seq.start();
@@ -322,6 +409,8 @@ void onTrackCombo(App& a, Btn b) {
     } else if (b == BTN_R1) {
         AudioLock lock(a.audio);
         a.seq.solo = a.seq.solo == a.track ? -1 : a.track;
+    } else if (b == BTN_L1) {
+        setTrackType(a, a.track, !a.isDrum[a.track]);
     }
 }
 
@@ -377,21 +466,32 @@ void onPress(App& a, Btn b) {
     if (pad >= 0) {
         AudioLock lock(a.audio);
         int note = padMidi(a, pad);
-        curSynth(a).noteOn(pad, midiHz(note));
+        curInst(a).noteOn(pad, note);
         a.padDown[pad] = true;
+        if (a.isDrum[a.track]) a.drumPad[a.track] = pad; // EDIT follows the last hit
         if (a.seq.recording) a.rec[pad] = a.seq.record(a.track, note);
         return;
     }
 
     switch (b) {
-    case BTN_L1: loadPreset(a, a.track, a.preset[a.track] - 1); break;
-    case BTN_R1: loadPreset(a, a.track, a.preset[a.track] + 1); break;
+    case BTN_L1:
+    case BTN_R1: {
+        int dir = b == BTN_L1 ? -1 : 1;
+        if (a.isDrum[a.track]) loadKit(a, a.track, a.kit[a.track] + dir);
+        else loadPreset(a, a.track, a.preset[a.track] + dir);
+        break;
+    }
     case BTN_R3: toggleRecord(a); break;
     case BTN_L2: a.octave = std::max(a.octave - 1, 1); break;
     case BTN_R2: a.octave = std::min(a.octave + 1, 7); break;
     case BTN_START: togglePlay(a); break;
-    case BTN_UP:   if (a.editMode) a.paramSel = (a.paramSel + P_COUNT - 1) % P_COUNT; break;
-    case BTN_DOWN: if (a.editMode) a.paramSel = (a.paramSel + 1) % P_COUNT; break;
+    case BTN_UP:
+    case BTN_DOWN:
+        if (a.editMode) {
+            int n      = paramCount(a);
+            a.paramSel = (std::min(a.paramSel, n - 1) + (b == BTN_UP ? n - 1 : 1)) % n;
+        }
+        break;
     case BTN_LEFT:
     case BTN_RIGHT:
         if (a.editMode) {
@@ -630,11 +730,20 @@ const SDL_Color kAccent  = {255, 176, 64, 255};
 const SDL_Color kPlayCol = {96, 220, 140, 255};
 const SDL_Color kScopeC  = {90, 210, 255, 255};
 
-void drawParams(App& a, const Params& p) {
+void drawParams(App& a) {
     SDL_Renderer* r = a.renderer;
     const int x = 24, y = 196, w = 480, rowH = 40;
     const int panelH = kParamRows * rowH + 20;
     fillRect(r, x, y - 12, w, panelH, kPanel);
+
+    std::vector<ParamRow> rows;
+    {
+        AudioLock lock(a.audio);
+        rows = paramRows(a);
+    }
+    const int count = int(rows.size());
+    a.paramSel      = std::min(a.paramSel, count - 1);
+    a.paramTop      = std::min(a.paramTop, std::max(count - kParamRows, 0));
 
     // Keep the selected row inside the visible window.
     if (a.paramSel < a.paramTop) a.paramTop = a.paramSel;
@@ -643,19 +752,20 @@ void drawParams(App& a, const Params& p) {
     // Scroll bar on the panel's right edge.
     const int trackH = panelH - 16;
     fillRect(r, x + w - 8, y - 4, 4, trackH, kLine);
-    fillRect(r, x + w - 8, y - 4 + trackH * a.paramTop / P_COUNT, 4, trackH * kParamRows / P_COUNT, kDim);
+    const int shown = std::min(kParamRows, count);
+    fillRect(r, x + w - 8, y - 4 + trackH * a.paramTop / count, 4, trackH * shown / count, kDim);
 
-    for (int i = a.paramTop; i < a.paramTop + kParamRows; ++i) {
+    for (int i = a.paramTop; i < a.paramTop + shown; ++i) {
         int  ry  = y + (i - a.paramTop) * rowH;
         bool sel = a.editMode && i == a.paramSel;
         if (sel) fillRect(r, x + 4, ry - 6, w - 16, rowH - 4, {60, 48, 30, 255});
         SDL_Color c = sel ? kAccent : kText;
         drawText(r, x + 14, ry + 2, 3, sel ? ">" : " ", kAccent);
-        drawText(r, x + 40, ry + 2, 3, kParamNames[i], c);
-        drawText(r, x + 214, ry + 2, 3, paramText(p, i), c);
+        drawText(r, x + 40, ry + 2, 3, rows[i].name, c);
+        drawText(r, x + 214, ry + 2, 3, rows[i].value, c);
         int bx = x + 378, bw = 86;
         fillRect(r, bx, ry + 4, bw, 14, kLine);
-        fillRect(r, bx, ry + 4, int(bw * paramNorm(p, i)), 14, sel ? kAccent : kDim);
+        fillRect(r, bx, ry + 4, int(bw * rows[i].norm), 14, sel ? kAccent : kDim);
     }
 }
 
@@ -705,16 +815,27 @@ void drawPad(App& a, const SeqView& v, int pad, int cx, int cy, const char* labe
     if (a.held[BTN_L3]) { // track modifier: pads become track select / mute
         text = pad < 4 ? fmt("TRK%d", pad + 1) : fmt("MUTE%d", pad - 3);
         on   = pad < 4 ? pad == a.track : v.mute[pad - 4];
+    } else if (a.isDrum[a.track]) {
+        disabled = pad < 4 && a.editMode;
+        text     = disabled ? "PARAM" : a.kits[a.kit[a.track]].pads[pad].name;
+        on       = a.padDown[pad];
     } else {
         disabled = pad < 4 && a.editMode;
         text     = disabled ? "PARAM" : noteName(padMidi(a, pad));
         on       = a.padDown[pad];
     }
+    // The pad whose settings EDIT shows on a drum track gets an accent outline.
+    bool editing = a.editMode && a.isDrum[a.track] && pad == a.drumPad[a.track] && !a.held[BTN_L3];
     SDL_Color onCol = a.held[BTN_L3] ? (pad < 4 ? kAccent : kRecCol) : kPlayCol;
     fillRect(r, cx - w / 2, cy - h / 2, w, h, on ? onCol : kPanel);
-    strokeRect(r, cx - w / 2, cy - h / 2, w, h, disabled ? kLine : kDim);
+    strokeRect(r, cx - w / 2, cy - h / 2, w, h, editing ? kAccent : disabled ? kLine : kDim);
     SDL_Color tc = on ? kBg : (disabled ? kLine : kText);
-    drawTextCentered(r, cx, cy - 16, 3, text, tc);
+    if (text.size() <= 6) {
+        drawTextCentered(r, cx, cy - 16, 3, text, tc);
+    } else {
+        if (text.size() > 8) text.resize(8);
+        drawTextCentered(r, cx, cy - 12, 2, text, tc);
+    }
     drawTextCentered(r, cx, cy + 6, 2, label, on ? kBg : kDim);
 }
 
@@ -740,7 +861,7 @@ void drawTracks(App& a, const SeqView& v) {
             fillRect(r, x, ry, 6, rowH, kAccent);
         }
         SDL_Color label = !v.audible[t] ? kDim : sel ? kAccent : kText;
-        std::string name = fmt("%d %s%s", t + 1, kPresets[a.preset[t]].name, a.edited[t] ? "*" : "");
+        std::string name = fmt("%d %s", t + 1, trackName(a, t).c_str());
         drawText(r, x + 16, ry + 10, 2, name, label);
 
         const Pattern& pat = v.patterns[t];
@@ -785,15 +906,13 @@ void drawTransport(App& a, const SeqView& v) {
 
 void draw(App& a) {
     SDL_Renderer* r = a.renderer;
-    Params  p;
     int     voices;
     SeqView sv;
     {
         AudioLock lock(a.audio);
-        p      = curSynth(a).params;
         voices = 0;
         for (int t = 0; t < kTracks; ++t) {
-            voices += a.synths[t].activeVoices();
+            voices += a.inst[t]->activeVoices();
             sv.patterns[t] = a.seq.patterns[t];
             sv.step[t]     = a.seq.currentStep(t);
             sv.audible[t]  = a.seq.audible(t);
@@ -835,14 +954,16 @@ void draw(App& a) {
     fillRect(r, 680, 42, int(160 * std::min(peak / 100.0f, 1.0f)), 10, lc);
 
     // Preset
-    std::string name = kPresets[a.preset[a.track]].name;
-    if (a.edited[a.track]) name += "*";
+    std::string name = trackName(a, a.track);
     drawText(r, 24, 96, 6, "<", kDim);
     drawText(r, kW - 24 - textWidth(">", 6), 96, 6, ">", kDim);
     drawTextCentered(r, kW / 2, 92, 6, name, kText);
-    drawTextCentered(r, kW / 2, 142, 2, fmt("TRACK %d   PRESET %d/%d   (L1 / R1)", a.track + 1, a.preset[a.track] + 1, kPresetCount), kDim);
+    std::string sub = a.isDrum[a.track]
+                    ? fmt("TRACK %d   DRUM KIT %d/%d   (L1 / R1)", a.track + 1, a.kit[a.track] + 1, int(a.kits.size()))
+                    : fmt("TRACK %d   PRESET %d/%d   (L1 / R1)", a.track + 1, a.preset[a.track] + 1, kPresetCount);
+    drawTextCentered(r, kW / 2, 142, 2, sub, kDim);
 
-    drawParams(a, p);
+    drawParams(a);
     drawTracks(a, sv);
 
     // Pads
@@ -851,8 +972,12 @@ void draw(App& a) {
     drawPadCluster(a, sv, 0, 200, 568, dpadLabels);
     drawPadCluster(a, sv, 4, 824, 568, faceLabels);
 
-    drawTextCentered(r, kW / 2, 520, 3, fmt("OCT %d", a.octave), kText);
-    drawTextCentered(r, kW / 2, 560, 3, fmt("%s %s", kNoteNames[a.root], kScales[a.scale].name), kText);
+    if (a.isDrum[a.track]) {
+        drawTextCentered(r, kW / 2, 540, 3, "DRUMS", kText);
+    } else {
+        drawTextCentered(r, kW / 2, 520, 3, fmt("OCT %d", a.octave), kText);
+        drawTextCentered(r, kW / 2, 560, 3, fmt("%s %s", kNoteNames[a.root], kScales[a.scale].name), kText);
+    }
     drawTextCentered(r, kW / 2, 600, 3, fmt("VOICES %d", voices), voices ? kPlayCol : kDim);
     if (!a.audio) drawTextCentered(r, kW / 2, 494, 3, "NO AUDIO", {255, 80, 80, 255});
 
@@ -864,9 +989,12 @@ void draw(App& a) {
     if (a.held[BTN_SELECT])
         drawText(r, 16, kH - 54, 2, "+A:REC +B:UNDO +X:CLEAR +Y:CLICK +</>:BPM +UP/DN:LEN +L1/R1:SCALE +L2/R2:KEY", kAccent);
     else if (a.held[BTN_L3])
-        drawText(r, 16, kH - 54, 2, "L3 + D-PAD:SELECT TRACK  + X/A/B/Y:MUTE  + R1:SOLO  (TAP L3:NEXT TRACK)", kAccent);
+        drawText(r, 16, kH - 54, 2, "L3 + D-PAD:TRACK  + X/A/B/Y:MUTE  + R1:SOLO  + L1:SYNTH/DRUM  (TAP:NEXT)", kAccent);
     else
-        drawText(r, 16, kH - 54, 2, "START:PLAY R3:REC L3:TRACK SELECT:EDIT/MORE L1/R1:PRESET L2/R2:OCT", kDim);
+        drawText(r, 16, kH - 54, 2, a.isDrum[a.track]
+                                        ? "START:PLAY R3:REC L3:TRACK SELECT:EDIT/MORE L1/R1:KIT"
+                                        : "START:PLAY R3:REC L3:TRACK SELECT:EDIT/MORE L1/R1:PRESET L2/R2:OCT",
+                 kDim);
     std::string in = "IN: " + a.lastInput;
     if (in.size() > 84) in.resize(84);
     drawText(r, 16, kH - 26, 2, in, kText);
@@ -932,15 +1060,33 @@ int main(int argc, char* argv[]) {
         a.sampleRate = have.freq;
         a.mono.resize(std::max<int>(have.samples, 512));
         for (Synth& s : a.synths) s.init(have.freq);
+        for (DrumKit& d : a.drums) d.init(have.freq);
         a.seq.init(have.freq);
         a.seq.latencyFrames = have.samples;
         SDL_Log("audio: %d Hz, %d ch, %d samples", have.freq, have.channels, have.samples);
     } else {
         SDL_Log("SDL_OpenAudioDevice failed: %s", SDL_GetError());
         for (Synth& s : a.synths) s.init(48000);
+        for (DrumKit& d : a.drums) d.init(48000);
         a.seq.init(48000);
     }
-    for (int t = 0; t < kTracks; ++t) loadPreset(a, t, a.preset[t]);
+
+    // Drum kits live in samples/kits/<kit>/*.wav next to the binary (on the device),
+    // or under the working directory (running from the repo on PC).
+    {
+        char*       base = SDL_GetBasePath();
+        std::string dir  = std::string(base ? base : "") + "samples/kits";
+        SDL_free(base);
+        a.kits = loadKits(dir);
+        if (a.kits.empty()) a.kits = loadKits("samples/kits");
+        SDL_Log("drum kits: %d", int(a.kits.size()));
+    }
+    for (int t = 0; t < kTracks; ++t) {
+        a.inst[t] = &a.synths[t];
+        loadPreset(a, t, a.preset[t]);
+        loadKit(a, t, 0);
+    }
+    setTrackType(a, kTracks - 1, true); // the last track starts as drums when a kit is available
     if (a.audio) SDL_PauseAudioDevice(a.audio, 0);
 
     while (!a.quit) {
