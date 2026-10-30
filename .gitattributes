@@ -1,0 +1,2 @@
+*.sh text eol=lf
+*.keys text eol=lf
