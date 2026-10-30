@@ -19,7 +19,31 @@ float polyBlep(float t, float dt) {
     return 0.0f;
 }
 
-float wrap01(float x) { return x - std::floor(x); }
+// Phases only ever move forward by less than one cycle, so a compare beats floor().
+float wrap01(float x) { return x >= 1.0f ? x - 1.0f : x; }
+
+// Sine from a table with linear interpolation; t in [0, 1).
+constexpr int kSineSize = 1024;
+struct SineTable {
+    float v[kSineSize + 1];
+    SineTable() {
+        for (int i = 0; i <= kSineSize; ++i) v[i] = std::sin(2.0f * kPi * float(i) / kSineSize);
+    }
+};
+const SineTable kSine;
+
+float fastSin(float t) {
+    float x    = t * kSineSize;
+    int   i    = static_cast<int>(x);
+    float frac = x - float(i);
+    return kSine.v[i] + (kSine.v[i + 1] - kSine.v[i]) * frac;
+}
+
+// Rational tanh approximation, exact enough for a soft limiter.
+float softClip(float x) {
+    x = std::clamp(x, -3.0f, 3.0f);
+    return x * (27.0f + x * x) / (27.0f + 9.0f * x * x);
+}
 } // namespace
 
 const char* waveName(Wave w) {
@@ -133,7 +157,7 @@ float Synth::noise() {
 float Synth::oscillator(Wave w, float t, float dt) {
     switch (w) {
     case Wave::Sine:
-        return std::sin(2.0f * kPi * t);
+        return fastSin(t);
     case Wave::Triangle:
         return 1.0f - 4.0f * std::fabs(t - 0.5f);
     case Wave::Saw:
@@ -169,10 +193,21 @@ void Synth::render(float* out, int frames) {
     const float feedback    = delayFeedbackGain(p.delayFeedback);
     if (delaySmooth_ < 0.0f) delaySmooth_ = delayTarget;
 
+    // With DLY MIX at zero the delay is inaudible, so skip it and empty the line
+    // so stale echoes don't come back when it is turned up again.
+    const bool useDelay = p.delayMix > 0.0f;
+    if (!useDelay) {
+        if (delayInUse_) std::fill(delayBuf_.begin(), delayBuf_.end(), 0.0f);
+        delayInUse_ = false;
+        silentRun_  = delaySize;
+    }
+    delayInUse_ = useDelay;
+
     // Idle: no voices and the delay line has held only silence for a full lap.
     if (silentRun_ >= delaySize && activeVoices() == 0) {
         std::fill(out, out + frames, 0.0f);
-        lfoPhase_ = wrap01(lfoPhase_ + lfoInc * frames);
+        lfoPhase_ += lfoInc * frames;
+        lfoPhase_ -= std::floor(lfoPhase_);
         return;
     }
 
@@ -180,7 +215,7 @@ void Synth::render(float* out, int frames) {
         const int n = std::min(kBlock, frames - start);
 
         // Global LFO, evaluated once per block.
-        const float lfo = std::sin(2.0f * kPi * lfoPhase_);
+        const float lfo = fastSin(lfoPhase_);
         lfoPhase_       = wrap01(lfoPhase_ + lfoInc * n);
         float pitchMul = 1.0f, cutoffMul = 1.0f, ampMul = 1.0f;
         switch (p.lfoDest) {
@@ -234,6 +269,10 @@ void Synth::render(float* out, int frames) {
             v.fenv *= fenvBlockMul;
         }
 
+        if (!useDelay) {
+            for (int i = 0; i < n; ++i) out[start + i] = softClip(mix[i] * gain * ampMul);
+            continue;
+        }
         for (int i = 0; i < n; ++i) {
             const float dry = mix[i] * gain * ampMul;
 
@@ -242,14 +281,14 @@ void Synth::render(float* out, int frames) {
             float rp = float(delayWrite_) - delaySmooth_;
             if (rp < 0.0f) rp += float(delaySize);
             const int   i0   = static_cast<int>(rp);
-            const int   i1   = (i0 + 1) % delaySize;
+            const int   i1   = i0 + 1 == delaySize ? 0 : i0 + 1;
             const float frac = rp - float(i0);
             const float wet  = delayBuf_[i0] + (delayBuf_[i1] - delayBuf_[i0]) * frac;
             delayBuf_[delayWrite_] = dry + wet * feedback;
             silentRun_ = std::fabs(delayBuf_[delayWrite_]) > 1e-5f ? 0 : silentRun_ + 1;
-            delayWrite_ = (delayWrite_ + 1) % delaySize;
+            if (++delayWrite_ == delaySize) delayWrite_ = 0;
 
-            const float y = std::tanh(dry + wet * p.delayMix); // gentle limiter for chords / resonance
+            const float y = softClip(dry + wet * p.delayMix); // gentle limiter for chords / resonance
             out[start + i] = y;
         }
     }

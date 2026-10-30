@@ -95,4 +95,5 @@ private:
     int      delayWrite_ = 0;
     float    delaySmooth_ = -1.0f; // current delay length in samples, glides toward the target
     int      silentRun_   = 0;     // consecutive silent samples written to the delay line
+    bool     delayInUse_  = false;
 };
