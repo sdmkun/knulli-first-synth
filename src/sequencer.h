@@ -16,6 +16,12 @@ struct SeqStep {
     static constexpr int kMaxNotes = 8; // one per pad, so a drum step can hold the whole kit
     SeqNote notes[kMaxNotes];
     bool    empty() const;
+    int     count() const;
+    int     find(int pitch) const;           // slot holding `pitch`, or -1
+    bool    add(int pitch, int len);         // false when the step is full; same pitch updates its length
+    void    remove(int pitch);
+    // Notes sorted low to high; returns how many were written to `out`.
+    int     sorted(SeqNote* out) const;
 };
 
 struct Pattern {

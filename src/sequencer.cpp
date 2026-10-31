@@ -21,6 +21,40 @@ bool SeqStep::empty() const {
     return true;
 }
 
+int SeqStep::count() const {
+    int n = 0;
+    for (const SeqNote& s : notes)
+        if (s.pitch >= 0) ++n;
+    return n;
+}
+
+int SeqStep::find(int pitch) const {
+    for (int i = 0; i < kMaxNotes; ++i)
+        if (notes[i].pitch == pitch) return i;
+    return -1;
+}
+
+bool SeqStep::add(int pitch, int len) {
+    int slot = find(pitch);
+    if (slot < 0) slot = find(-1);
+    if (slot < 0 || pitch < 0 || pitch > 127) return false;
+    notes[slot] = {int8_t(pitch), uint8_t(std::clamp(len, 1, 255)), false};
+    return true;
+}
+
+void SeqStep::remove(int pitch) {
+    int slot = find(pitch);
+    if (slot >= 0) notes[slot] = SeqNote{};
+}
+
+int SeqStep::sorted(SeqNote* out) const {
+    int n = 0;
+    for (const SeqNote& s : notes)
+        if (s.pitch >= 0) out[n++] = s;
+    std::sort(out, out + n, [](const SeqNote& a, const SeqNote& b) { return a.pitch < b.pitch; });
+    return n;
+}
+
 void Pattern::clear() {
     for (SeqStep& s : steps) s = SeqStep{};
 }
