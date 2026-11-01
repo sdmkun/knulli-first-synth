@@ -190,3 +190,22 @@ void resetSynthParam(Params& p, const Params& from, int id) {
     else if (id == P_LFO_DEST) p.lfoDest = from.lfoDest;
     else if (float* v = paramValue(p, id)) *v = *paramValue(const_cast<Params&>(from), id);
 }
+
+// A fresh seed for the current track's generator.
+void newSeed(App& a) {
+    const int t    = a.track;
+    uint32_t  seed = (SDL_GetTicks() * 2654435761u) % 9999 + 1;
+    AudioLock lock(a.audio);
+    pushUndo(a, t);
+    if (a.isDrum[t]) a.drumGen[t].seed = seed;
+    else a.melodyGen[t].seed = seed;
+    regenerate(a, t);
+    a.message = fmt("T%d: NEW PATTERN, SEED %u  (SEL+B: UNDO)", t + 1, seed);
+}
+
+void mutateTrack(App& a) {
+    AudioLock lock(a.audio);
+    pushUndo(a, a.track);
+    mutate(a, a.track);
+    a.message = fmt("T%d: MUTATED  (SEL+B: UNDO)", a.track + 1);
+}

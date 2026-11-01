@@ -138,6 +138,6 @@ void clear(App& a) {
 } // namespace
 
 const ScreenOps kSeqScreen = {
-    "SEQ", draw, move, edit, enter, clear,
-    "A:OPEN STEP  A+PAD:EDIT  B+A:CLEAR  X:GEN Y:MUTATE  SEL+<>:SCREEN  L3/R3:MUTE/SOLO",
+    "SEQ", draw, move, edit, enter, clear, nullptr,
+    "A:OPEN STEP  A+PAD:EDIT  B+A:CLEAR  X:GENERATE  Y:MUTATE  L3/R3:MUTE/SOLO",
 };

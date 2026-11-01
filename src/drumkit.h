@@ -47,6 +47,8 @@ public:
 
     void noteOn(int key, int note, float gain) override;
     void noteOff(int) override {}
+    void setPitch(int, int) override {}
+    void kill(int key) override;
     void allOff() override;
     void render(float* out, int frames) override;
     int  activeVoices() const override;
@@ -55,6 +57,7 @@ public:
 
 private:
     struct Voice {
+        int           key    = -1;
         const Sample* sample = nullptr;
         double        pos    = 0.0;
         double        inc    = 1.0;

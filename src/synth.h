@@ -62,6 +62,8 @@ public:
 
     void noteOn(int key, int note, float gain) override;
     void noteOff(int key) override;
+    void setPitch(int key, int note) override;
+    void kill(int key) override;
     void allOff() override;
     void render(float* out, int frames) override;
     int  activeVoices() const override;
@@ -78,6 +80,7 @@ private:
         float fenv   = 0.0f; // filter envelope, 1 at note-on, decays to 0
         float gain   = 1.0f; // velocity
         bool  gate   = false;
+        bool  killed = false; // released by KIL: fades in a few ms instead of RELEASE
         float ic1    = 0.0f; // SVF integrator states
         float ic2    = 0.0f;
     };

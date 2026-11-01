@@ -13,6 +13,10 @@ public:
     virtual void noteOn(int key, int note, float gain) = 0;
     virtual void noteOff(int key)          = 0;
     virtual void allOff()                  = 0;
+    // Note commands: ARP moves a sounding note, KIL silences one quickly
+    // (a drum hit is cut short, a synth note skips its release).
+    virtual void setPitch(int key, int note) = 0;
+    virtual void kill(int key)               = 0;
 
     // Writes (not adds) `frames` mono samples.
     virtual void render(float* out, int frames) = 0;

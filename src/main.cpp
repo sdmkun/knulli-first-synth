@@ -70,30 +70,12 @@ void togglePlay(App& a) {
     else a.seq.start();
 }
 
-// X: a fresh seed for the current track's generator.
-void newSeed(App& a) {
-    const int t    = a.track;
-    uint32_t  seed = (SDL_GetTicks() * 2654435761u) % 9999 + 1;
-    AudioLock lock(a.audio);
-    pushUndo(a, t);
-    if (a.isDrum[t]) a.drumGen[t].seed = seed;
-    else a.melodyGen[t].seed = seed;
-    regenerate(a, t);
-    a.message = fmt("T%d: NEW PATTERN, SEED %u  (SEL+B: UNDO)", t + 1, seed);
-}
-
-void mutateTrack(App& a) {
-    AudioLock lock(a.audio);
-    pushUndo(a, a.track);
-    mutate(a, a.track);
-    a.message = fmt("T%d: MUTATED  (SEL+B: UNDO)", a.track + 1);
-}
-
 void onSelectCombo(App& a, Btn b) {
     switch (b) {
     case BTN_LEFT:
     case BTN_RIGHT:
-        a.screen = Screen(std::clamp(int(a.screen) + (b == BTN_LEFT ? -1 : 1), 0, SCR_COUNT - 1));
+        a.screen  = Screen(std::clamp(int(a.screen) + (b == BTN_LEFT ? -1 : 1), 0, SCR_COUNT - 1));
+        a.genOpen = false;
         break;
     case BTN_B: {
         AudioLock lock(a.audio);
@@ -120,13 +102,38 @@ void onSelectCombo(App& a, Btn b) {
     }
 }
 
-// D-pad: moves the cursor, or with A held edits what is under it.
+// D-pad: moves the cursor, with A held edits what is under it, and with B held
+// edits its secondary value (a drum hit's note command).
 void onDirection(App& a, Btn b) {
     const ScreenOps& ops = screenOps(a.screen);
     int dx = b == BTN_LEFT ? -1 : b == BTN_RIGHT ? 1 : 0;
     int dy = b == BTN_UP ? -1 : b == BTN_DOWN ? 1 : 0;
-    if (a.held[BTN_A] && a.aScreen == a.screen) ops.edit(a, dx, -dy);
-    else ops.move(a, dx, dy);
+    bool editing = a.held[BTN_A] && a.aScreen == a.screen;
+    if (a.genOpen) {
+        if (editing) genEdit(a, dx, -dy);
+        else genMove(a, dy);
+    } else if (editing) {
+        ops.edit(a, dx, -dy);
+    } else if (a.held[BTN_B] && ops.option) {
+        ops.option(a, dx, -dy);
+    } else {
+        ops.move(a, dx, dy);
+    }
+}
+
+// While the GENERATE popup is open it takes A, B, X and Y.
+bool onGenPress(App& a, Btn b) {
+    switch (b) {
+    case BTN_A:
+        a.aScreen = a.screen;
+        if (a.held[BTN_B]) genClear(a);
+        else genEnter(a);
+        return true;
+    case BTN_B: a.genOpen = false; return true;
+    case BTN_X: newSeed(a); a.genEdited = false; return true;
+    case BTN_Y: mutateTrack(a); a.genEdited = false; return true;
+    default:    return false;
+    }
 }
 
 void onPress(App& a, Btn b) {
@@ -136,6 +143,7 @@ void onPress(App& a, Btn b) {
         onSelectCombo(a, b);
         return;
     }
+    if (a.genOpen && onGenPress(a, b)) return;
     const ScreenOps& ops = screenOps(a.screen);
     switch (b) {
     case BTN_UP: case BTN_DOWN: case BTN_LEFT: case BTN_RIGHT:
@@ -146,7 +154,10 @@ void onPress(App& a, Btn b) {
         if (a.held[BTN_B]) ops.clear(a);
         else ops.enter(a);
         break;
-    case BTN_X:     newSeed(a); break;
+    case BTN_X:
+        a.genOpen   = true;
+        a.genEdited = false;
+        break;
     case BTN_Y:     mutateTrack(a); break;
     case BTN_START: togglePlay(a); break;
     case BTN_L1:    selectTrack(a, a.track - 1); break;
@@ -321,6 +332,7 @@ void draw(App& a) {
     SDL_SetRenderDrawColor(r, kBg.r, kBg.g, kBg.b, 255);
     SDL_RenderClear(r);
     screenOps(a.screen).draw(a);
+    if (a.genOpen) drawGenMenu(a);
     drawChrome(a);
     SDL_RenderPresent(r);
 }
@@ -428,7 +440,7 @@ int main(int argc, char* argv[]) {
     }
     setTrackType(a, kTracks - 1, true); // the last track starts as drums when a kit is available
     makeDefaultSong(a);
-    a.message = "START: PLAY   X: NEW PATTERN   SEL+LEFT/RIGHT: SCREENS";
+    a.message = "START: PLAY   X: GENERATE   SEL+LEFT/RIGHT: SCREENS";
     if (a.audio) SDL_PauseAudioDevice(a.audio, 0);
 
     while (!a.quit) {

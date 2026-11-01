@@ -13,6 +13,40 @@ float softClip(float x) {
 }
 } // namespace
 
+const char* fxName(Fx fx) {
+    static const char* kNames[] = {"---", "RET", "ARP", "KIL", "DLY", "CHA"};
+    return kNames[std::min(int(fx), int(Fx::Count) - 1)];
+}
+
+int fxDefault(Fx fx) {
+    switch (fx) {
+    case Fx::Ret: return 3;    // a 64th-note roll
+    case Fx::Arp: return 0x37; // minor triad
+    case Fx::Kil: return 6;    // half a step
+    case Fx::Dly: return 3;
+    case Fx::Cha: return 50;
+    default:      return 0;
+    }
+}
+
+int fxClamp(Fx fx, int v) {
+    switch (fx) {
+    case Fx::Ret: return std::clamp(v, 1, kTicksPerStep - 1);
+    case Fx::Arp: return std::clamp(v, 0, 0xFF);
+    case Fx::Kil: return std::clamp(v, 1, 99);
+    case Fx::Dly: return std::clamp(v, 1, kTicksPerStep - 1);
+    case Fx::Cha: return std::clamp(v, 0, 99);
+    default:      return 0;
+    }
+}
+
+std::string fxValueText(Fx fx, int v) {
+    static const char* kHex = "0123456789ABCDEF";
+    if (fx == Fx::None) return "--";
+    if (fx == Fx::Arp) return {kHex[(v >> 4) & 15], kHex[v & 15]};
+    return {char('0' + v / 10 % 10), char('0' + v % 10)};
+}
+
 float velocityGain(int vel) {
     // Roughly 3 dB apart below the default, gentler accents above it.
     static const float kGain[kMaxVel + 1] = {0.0f, 0.16f, 0.25f, 0.36f, 0.5f, 0.7f, 1.0f, 1.2f, 1.4f};
@@ -73,10 +107,9 @@ void Sequencer::init(int sampleRate) {
     sampleRate_ = sampleRate;
     trackBuf_.assign(1024, 0.0f);
     std::fill(std::begin(step_), std::end(step_), -1);
-    for (auto& cols : sounding_) std::fill(std::begin(cols), std::end(cols), -1);
 }
 
-double Sequencer::samplesPerStep() const { return sampleRate_ * 60.0 / bpm_ / 4.0; }
+double Sequencer::samplesPerTick() const { return sampleRate_ * 60.0 / bpm_ / 4.0 / kTicksPerStep; }
 
 void Sequencer::setBpm(float bpm) { bpm_ = std::clamp(bpm, 40.0f, 240.0f); }
 
@@ -87,7 +120,8 @@ void Sequencer::setLength(int track, int steps) {
 void Sequencer::start() {
     playing_ = true;
     std::fill(std::begin(step_), std::end(step_), -1);
-    untilStep_ = 0.0; // fire step 0 on the next sample
+    tick_      = -1;
+    untilTick_ = 0.0; // fire step 0 on the next sample
 }
 
 void Sequencer::stop(Instrument* const* inst) {
@@ -97,35 +131,105 @@ void Sequencer::stop(Instrument* const* inst) {
 }
 
 void Sequencer::releaseTrack(Instrument& inst, int track) {
-    for (int& key : sounding_[track]) {
-        if (key >= 0) inst.noteOff(key);
-        key = -1;
+    for (Column& c : cols_[track]) {
+        if (c.key >= 0) inst.noteOff(c.key);
+        c = Column{};
     }
 }
 
-void Sequencer::fireStep(Instrument* const* inst) {
+float Sequencer::random01() {
+    rng_ ^= rng_ << 13;
+    rng_ ^= rng_ >> 17;
+    rng_ ^= rng_ << 5;
+    return (rng_ >> 8) * (1.0f / 16777216.0f);
+}
+
+int Sequencer::newKey(int track) {
+    int key         = kKeyBase + nextKey_[track];
+    nextKey_[track] = (nextKey_[track] + 1) % kKeys;
+    return key;
+}
+
+// Queues each column's entry of the new step at its tick (DLY moves it later; CHA may drop it).
+void Sequencer::startStep(int track) {
+    const SeqStep& st = patterns[track].steps[step_[track]];
+    for (int c = 0; c < SeqStep::kMaxNotes; ++c) {
+        Column&        col = cols_[track][c];
+        const SeqNote& n   = st.notes[c];
+        col.retEvery       = 0; // rolls last one step
+        col.pending        = false;
+        if (n.pitch == SeqNote::kEmpty) continue;
+        if (n.isNote() && n.fx == Fx::Cha && random01() * 100.0f >= n.fxVal) continue;
+        col.pending  = true;
+        col.pend     = n;
+        col.pendTick = n.isNote() && n.fx == Fx::Dly ? std::min<int>(n.fxVal, kTicksPerStep - 1) : 0;
+    }
+}
+
+// A note or OFF ends whatever its column was holding; a note then takes the column.
+void Sequencer::trigger(Instrument& inst, int track, Column& col, const SeqNote& n) {
+    if (col.key >= 0) inst.noteOff(col.key);
+    col.key      = -1;
+    col.arp      = 0;
+    col.killAt   = -1;
+    col.retEvery = 0;
+    if (!n.isNote()) return;
+    col.key  = newKey(track);
+    col.note = n.pitch;
+    col.gain = velocityGain(n.vel);
+    inst.noteOn(col.key, col.note, col.gain);
+    const int tickInStep = int(tick_ % kTicksPerStep);
+    switch (n.fx) {
+    case Fx::Ret:
+        col.retEvery = std::max<int>(1, n.fxVal);
+        col.retNext  = tickInStep + col.retEvery;
+        break;
+    case Fx::Arp:
+        col.arp    = n.fxVal;
+        col.arpAge = 0;
+        break;
+    case Fx::Kil: col.killAt = tick_ + std::max<int>(1, n.fxVal); break;
+    default: break;
+    }
+}
+
+void Sequencer::fireTick(Instrument* const* inst) {
+    ++tick_;
+    const int tickInStep = int(tick_ % kTicksPerStep);
     for (int t = 0; t < kTracks; ++t) {
-        Pattern&    pat   = patterns[t];
         Instrument& track = *inst[t];
-        step_[t]          = (step_[t] + 1) % pat.length;
-
-        if (!audible(t)) {
-            releaseTrack(track, t);
-            continue;
+        if (tickInStep == 0) {
+            step_[t] = (step_[t] + 1) % patterns[t].length;
+            if (!audible(t)) {
+                releaseTrack(track, t);
+                continue;
+            }
+            startStep(t);
         }
+        if (!audible(t)) continue;
 
-        // A note or OFF ends whatever its column was holding; a note then takes the column.
-        const SeqStep& st = pat.steps[step_[t]];
-        for (int c = 0; c < SeqStep::kMaxNotes; ++c) {
-            const SeqNote& n = st.notes[c];
-            if (n.pitch == SeqNote::kEmpty) continue;
-            int& key = sounding_[t][c];
-            if (key >= 0) track.noteOff(key);
-            key = -1;
-            if (!n.isNote()) continue;
-            key         = kKeyBase + nextKey_[t];
-            nextKey_[t] = (nextKey_[t] + 1) % kKeys;
-            track.noteOn(key, n.pitch, velocityGain(n.vel));
+        for (Column& col : cols_[t]) {
+            if (col.pending && col.pendTick == tickInStep) {
+                col.pending = false;
+                trigger(track, t, col, col.pend);
+                continue;
+            }
+            if (col.key < 0) continue;
+            if (col.killAt >= 0 && tick_ >= col.killAt) {
+                track.kill(col.key);
+                col.key = -1;
+                continue;
+            }
+            if (col.retEvery > 0 && col.retNext == tickInStep) {
+                track.noteOff(col.key);
+                col.key = newKey(t);
+                track.noteOn(col.key, col.note, col.gain);
+                col.retNext += col.retEvery;
+            }
+            if (col.arp && ++col.arpAge % kArpTicks == 0) {
+                const int offsets[3] = {0, col.arp >> 4, col.arp & 15};
+                track.setPitch(col.key, col.note + offsets[col.arpAge / kArpTicks % 3]);
+            }
         }
     }
 }
@@ -133,12 +237,12 @@ void Sequencer::fireStep(Instrument* const* inst) {
 void Sequencer::process(Instrument* const* inst, float* out, int frames) {
     int done = 0;
     while (done < frames) {
-        if (playing_ && untilStep_ <= 0.0) {
-            fireStep(inst);
-            untilStep_ += samplesPerStep();
+        if (playing_ && untilTick_ <= 0.0) {
+            fireTick(inst);
+            untilTick_ += samplesPerTick();
         }
         int n = std::min(frames - done, int(trackBuf_.size()));
-        if (playing_) n = std::clamp(int(std::ceil(untilStep_)), 1, n);
+        if (playing_) n = std::clamp(int(std::ceil(untilTick_)), 1, n);
 
         float* o = out + done;
         std::fill(o, o + n, 0.0f);
@@ -148,7 +252,7 @@ void Sequencer::process(Instrument* const* inst, float* out, int frames) {
         }
         for (int i = 0; i < n; ++i) o[i] = softClip(o[i] * 0.8f);
 
-        if (playing_) untilStep_ -= n;
+        if (playing_) untilTick_ -= n;
         done += n;
     }
 }

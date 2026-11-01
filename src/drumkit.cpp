@@ -138,7 +138,7 @@ void DrumKit::setKit(const Kit* kit) {
     kit_ = kit;
 }
 
-void DrumKit::noteOn(int, int note, float gain) {
+void DrumKit::noteOn(int key, int note, float gain) {
     const int pad = note - kBaseNote;
     if (!kit_ || pad < 0 || pad >= Kit::kPads) return;
     const Sample& s = kit_->pads[pad];
@@ -152,6 +152,7 @@ void DrumKit::noteOn(int, int note, float gain) {
     }
     const PadSettings& ps  = pads[pad];
     const double       len = double(s.data.size());
+    v->key    = key;
     v->sample = &s;
     v->pos    = std::floor(std::clamp(ps.start, 0.0f, 1.0f) * len);
     v->end    = std::max(v->pos + 1.0, std::clamp(ps.end, 0.0f, 1.0f) * len);
@@ -159,6 +160,12 @@ void DrumKit::noteOn(int, int note, float gain) {
     v->inc    = double(s.rate) / sampleRate_ * std::pow(2.0, ps.pitch / 12.0);
     v->gain   = ps.volume * ps.volume * gain;
     v->age    = ++counter_;
+}
+
+// Brings END close so the usual end fade cuts the hit off.
+void DrumKit::kill(int key) {
+    for (Voice& v : voices_)
+        if (v.sample && v.key == key) v.end = std::min(v.end, v.pos + 64.0 * v.inc);
 }
 
 void DrumKit::allOff() {

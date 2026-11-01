@@ -49,6 +49,14 @@ void setHit(Pattern& p, int pad, int step, bool on, int vel = kDefaultVel) {
     else if (!hasHit(p, pad, step)) p.steps[step].add(kDrumBase + pad, vel);
 }
 
+// Gives an existing hit a note command.
+void setFx(Pattern& p, int pad, int step, Fx fx, int value) {
+    int c = p.steps[step].find(kDrumBase + pad);
+    if (c < 0) return;
+    p.steps[step].notes[c].fx    = fx;
+    p.steps[step].notes[c].fxVal = uint8_t(value);
+}
+
 // Velocity for an accent of -1 (quietest) .. +1 (loudest), scaled by `dynamics`.
 // The scale is lopsided because the default level sits near the top.
 int dynVel(float accent, float dynamics) {
@@ -145,7 +153,12 @@ void generateDrums(Pattern& p, const DrumGen& g) {
         int fillPad = rng.uni() < 0.5f ? 1 : 5;
         for (int i = bar * 16 + 12; i < std::min(bar * 16 + 16, p.length); ++i) // a crescendo into the next bar
             if (rng.uni() < 0.6f) setHit(p, fillPad, i, true, dynVel((i % 16 - 13.5f) * 0.5f, g.dynamics));
+        if (rng.uni() < g.variation) setFx(p, fillPad, std::min(bar * 16 + 15, p.length - 1), Fx::Ret, rng.uni() < 0.5f ? 3 : 4);
     }
+
+    // Variation: the odd hi-hat roll.
+    for (int i = 0; i < p.length; ++i)
+        if (rng.uni() < g.variation * 0.12f) setFx(p, 2, i, Fx::Ret, rng.uni() < 0.7f ? 6 : 4);
 }
 
 void generateMelody(Pattern& p, const MelodyGen& g, const ScaleInfo& s) {

@@ -131,11 +131,25 @@ void Synth::noteOn(int key, int note, float gain) {
     target->gate = true;
     target->fenv = 1.0f;
     target->gain = gain;
+    target->killed = false;
 }
 
 void Synth::noteOff(int key) {
     for (Voice& v : voices_)
         if (v.key == key) v.gate = false;
+}
+
+void Synth::setPitch(int key, int note) {
+    for (Voice& v : voices_)
+        if (v.key == key) v.freq = 440.0f * std::pow(2.0f, (note - 69) / 12.0f);
+}
+
+void Synth::kill(int key) {
+    for (Voice& v : voices_) {
+        if (v.key != key) continue;
+        v.gate   = false;
+        v.killed = true;
+    }
 }
 
 void Synth::allOff() {
@@ -184,6 +198,7 @@ void Synth::render(float* out, int frames) {
     const float attackStep = 1.0f / (attackSec(p.attack) * sr);
     // Exponential decays reaching -60 dB after the given time.
     const float releaseMul   = std::exp(std::log(0.001f) / (releaseSec(p.release) * sr));
+    const float killMul      = std::exp(std::log(0.001f) / (0.005f * sr));
     const float fenvBlockMul = std::exp(std::log(0.001f) * kBlock / (fenvDecaySec(p.fenvDecay) * sr));
     const float fenvOct      = fenvOctaves(p.fenvAmount);
     const float detuneMul    = std::pow(2.0f, detuneCents(p.detune) / 1200.0f);
@@ -246,7 +261,7 @@ void Synth::render(float* out, int frames) {
                 if (v.gate) {
                     v.env = std::min(v.env + attackStep, 1.0f);
                 } else {
-                    v.env *= releaseMul;
+                    v.env *= v.killed ? killMul : releaseMul;
                     if (v.env < 0.0005f) {
                         v.env = 0.0f;
                         v.key = -1;

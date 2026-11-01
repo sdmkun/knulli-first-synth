@@ -1,9 +1,25 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 class Instrument;
+
+// Note commands, played in ticks (kTicksPerStep per step):
+//   RET v   retrigger every v ticks for the rest of the step (a roll)
+//   ARP xy  cycle the note, +x and +y semitones every kArpTicks while it sounds
+//   KIL v   cut the note v ticks after it starts
+//   DLY v   start the note v ticks late
+//   CHA v   play the note with a v% chance
+enum class Fx : uint8_t { None, Ret, Arp, Kil, Dly, Cha, Count };
+const char* fxName(Fx fx);
+int         fxDefault(Fx fx);                  // value a freshly chosen command starts at
+int         fxClamp(Fx fx, int value);         // keeps a value in the command's range
+std::string fxValueText(Fx fx, int value);     // "03", "37" (ARP shows two hex digits), ...
+
+constexpr int kTicksPerStep = 12; // so rolls can divide a step by 2, 3, 4 or 6
+constexpr int kArpTicks     = 3;
 
 // One entry in a step's column. Like a tracker, a note sounds until the next
 // note or OFF in the same column (wrapping around the pattern), not for a set length.
@@ -13,6 +29,8 @@ struct SeqNote {
 
     int8_t  pitch = kEmpty; // MIDI note, or kEmpty / kOff
     uint8_t vel   = 6;      // rough velocity 1..kMaxVel, see velocityGain()
+    Fx      fx    = Fx::None;
+    uint8_t fxVal = 0;
 
     bool isNote() const { return pitch >= 0; }
 };
@@ -74,19 +92,40 @@ public:
     int     solo          = -1;
 
 private:
-    double samplesPerStep() const;
-    void   fireStep(Instrument* const* inst);
+    // What one column of one track is doing between ticks.
+    struct Column {
+        int     key      = -1; // sounding instrument key
+        int     note     = 0;
+        float   gain     = 1.0f;
+        bool    pending  = false; // a note or OFF waits for its (delayed) tick in this step
+        int     pendTick = 0;
+        SeqNote pend;
+        int     retEvery = 0; // ticks between retriggers, 0 = no roll
+        int     retNext  = 0; // tick within the step
+        uint8_t arp      = 0; // xy semitone offsets, 0 = no arpeggio
+        int     arpAge   = 0; // ticks since the note started
+        long    killAt   = -1; // absolute tick
+    };
+
+    double samplesPerTick() const;
+    void   fireTick(Instrument* const* inst);
+    void   startStep(int track);
+    void   trigger(Instrument& inst, int track, Column& col, const SeqNote& n);
+    int    newKey(int track);
     void   releaseTrack(Instrument& inst, int track);
+    float  random01();
 
     int    sampleRate_ = 48000;
     float  bpm_        = 120.0f;
     bool   playing_    = false;
-    double untilStep_  = 0.0; // samples until the next step fires
+    double untilTick_  = 0.0; // samples until the next tick fires
+    long   tick_       = -1;  // ticks fired since start
+    uint32_t rng_      = 0x9E3779B9u;
 
     int step_[kTracks]; // step fired most recently, per track
 
-    int sounding_[kTracks][SeqStep::kMaxNotes]; // key held by each column, -1 = none
-    int nextKey_[kTracks] = {};
+    Column cols_[kTracks][SeqStep::kMaxNotes];
+    int    nextKey_[kTracks] = {};
 
     std::vector<float> trackBuf_;
 };

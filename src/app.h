@@ -101,12 +101,15 @@ struct App {
     int    lastVel[kTracks]  = {kDefaultVel, kDefaultVel, kDefaultVel, kDefaultVel}; // and how hard
 
     Cursor seqCur{0, 0};  // row -1 = BPM / KEY / SCALE fields
-    Cursor synthCur;      // cols 0..7 = note / length pairs, 8 = generator panel
-    Cursor drumCur{0, 0}; // col -1 = row label (Euclid), 0..15 = steps, 16 = generator panel
+    Cursor synthCur;      // cols: 4 per note column (NOTE, VEL, FX command, FX value)
+    Cursor drumCur{0, 0}; // col -1 = row label (Euclid), 0..15 = steps
     Cursor instCur;
 
     bool   held[BTN_COUNT]     = {};
     Uint32 repeatAt[BTN_COUNT] = {};
+    bool   genOpen   = false; // GENERATE popup shown; it takes the D-pad, A and B
+    int    genRow    = 0;
+    bool   genEdited = false; // a setting changed since the last undo point
     Screen aScreen = SCR_SEQ; // screen A went down on; A+D-pad edits only if it is still showing
 
     int    previewKey   = -1; // note held by an audition, released at previewOffAt
@@ -142,6 +145,8 @@ void        loadKit(App& a, int t, int index);
 void        setTrackType(App& a, int t, bool drum);
 void        regenerate(App& a, int t);        // locked; rebuilds track t from its generator settings
 void        mutate(App& a, int t);            // locked
+void        newSeed(App& a);                  // current track: new seed, regenerate (with undo and a message)
+void        mutateTrack(App& a);              // current track: mutate (with undo and a message)
 float       synthParamNorm(const Params& p, int id);
 std::string synthParamText(const Params& p, int id);
 void        adjustSynthParam(Params& p, int id, int fine, int coarse);
@@ -155,10 +160,18 @@ struct ScreenOps {
     void (*edit)(App&, int fine, int coarse); // A held + D-pad
     void (*enter)(App&);                      // A pressed
     void (*clear)(App&);                      // B + A
+    void (*option)(App&, int fine, int coarse); // B held + D-pad; may be null
     const char* hints;
 };
 extern const ScreenOps kSeqScreen, kPatternScreen, kInstrScreen;
 const ScreenOps& screenOps(Screen s);
+
+// GENERATE popup (ui_gen.cpp), drawn over the current screen while a.genOpen.
+void drawGenMenu(App& a);
+void genMove(App& a, int dy);
+void genEdit(App& a, int fine, int coarse);
+void genEnter(App& a);
+void genClear(App& a);
 
 // Shared chrome (ui.cpp)
 void drawChrome(App& a);                                   // header, transport strip, footer

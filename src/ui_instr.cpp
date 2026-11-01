@@ -221,6 +221,6 @@ void clear(App& a) {
 } // namespace
 
 const ScreenOps kInstrScreen = {
-    "INSTR", draw, move, edit, enter, clear,
+    "INSTR", draw, move, edit, enter, clear, nullptr,
     "A:PLAY  A+PAD:EDIT  B+A:RESET  L1/R1:TRACK  SEL+<>:SCREEN  START:PLAY",
 };

@@ -1,7 +1,7 @@
 // PATTERN: where a track is written. Synth tracks get a tracker with four
-// note / length column pairs; drum tracks get an 8-pad x 16-step grid. The
-// panel on the right holds the track's generator settings: changing one
-// rebuilds the pattern on the spot.
+// columns of NOTE / VEL / FX; drum tracks get an 8-pad x 16-step grid with the
+// cell under the cursor shown in full on the right. Generators live in the
+// GENERATE popup (ui_gen.cpp).
 
 #include <algorithm>
 
@@ -10,140 +10,35 @@
 
 namespace {
 
-constexpr int kPanelX = 640;
-constexpr int kTop    = 66;
+// ---------------------------------------------------------------- shared
 
-// ---------------------------------------------------------------- generator panels
-
-enum MelodyField { M_LEN, M_OCT, M_DENSITY, M_RANGE, M_MOTION, M_LENGTH, M_CHORD, M_DYNAMICS, M_SEED, M_COUNT };
-const char* kMelodyNames[M_COUNT] = {"LEN", "OCT", "DENSITY", "RANGE", "MOTION", "LENGTH", "CHORD", "DYNAMICS", "SEED"};
-
-enum DrumField { D_LEN, D_STYLE, D_DENSITY, D_VARIATION, D_DYNAMICS, D_SEED, D_COUNT };
-const char* kDrumNames[D_COUNT] = {"LEN", "STYLE", "DENSITY", "VARIATION", "DYNAMICS", "SEED"};
-
-int panelCount(const App& a) { return a.isDrum[a.track] ? int(D_COUNT) : int(M_COUNT); }
-
-std::string pct(float v) { return fmt("%d%%", int(v * 100.0f + 0.5f)); }
-
-// Value text and bar position (-1 = no bar) of one panel field.
-std::string panelValue(const App& a, int f, float& bar) {
-    const int t   = a.track;
-    const int len = a.seq.patterns[t].length;
-    bar           = -1.0f;
-    if (a.isDrum[t]) {
-        const DrumGen& g = a.drumGen[t];
-        switch (f) {
-        case D_LEN:       return std::to_string(len);
-        case D_STYLE:     return drumStyleName(g.style);
-        case D_DENSITY:   bar = g.density; return pct(g.density);
-        case D_VARIATION: bar = g.variation; return pct(g.variation);
-        case D_DYNAMICS:  bar = g.dynamics; return pct(g.dynamics);
-        case D_SEED:      return std::to_string(g.seed);
-        }
-        return "";
-    }
-    const MelodyGen& g = a.melodyGen[t];
-    switch (f) {
-    case M_LEN:     return std::to_string(len);
-    case M_OCT:     return std::to_string(g.octave);
-    case M_DENSITY: bar = g.density; return pct(g.density);
-    case M_RANGE:   bar = g.range; return pct(g.range);
-    case M_MOTION:  bar = g.motion; return pct(g.motion);
-    case M_LENGTH:  bar = g.length; return pct(g.length);
-    case M_CHORD:   bar = g.chord; return pct(g.chord);
-    case M_DYNAMICS: bar = g.dynamics; return pct(g.dynamics);
-    case M_SEED:    return std::to_string(g.seed);
-    }
-    return "";
-}
-
-void drawPanel(App& a, int selRow) {
-    SDL_Renderer* r = a.renderer;
-    fillRect(r, kPanelX, kTop, kW - kPanelX - 16, 584, kPanel);
-    drawText(r, kPanelX + 16, kTop + 14, 3, "GENERATE", kAccent);
-    const int n = panelCount(a);
-    for (int f = 0; f < n; ++f) {
-        int         y = kTop + 64 + f * 44;
-        float       bar;
-        std::string v = panelValue(a, f, bar);
-        const char* name = a.isDrum[a.track] ? kDrumNames[f] : kMelodyNames[f];
-        drawField(r, kPanelX + 16, y, name, v, f == selRow, kPanelX + 150);
-        if (bar >= 0.0f) drawBar(r, kPanelX + 250, y + 2, 100, 10, bar, f == selRow ? kAccent : kDim);
-    }
-    int y = kTop + 64 + n * 44 + 20;
-    drawText(r, kPanelX + 16, y, 2, "X: NEW SEED", kDim);
-    drawText(r, kPanelX + 16, y + 24, 2, "Y: MUTATE", kDim);
-    drawText(r, kPanelX + 16, y + 48, 2, "SEL+B: UNDO / REDO", kDim);
-    drawText(r, kPanelX + 16, y + 72, 2, "SEL+X: CLEAR TRACK", kDim);
-}
-
-// Changes a generator field and rebuilds the track. Locked.
-void editPanel(App& a, int f, int fine, int coarse) {
-    const int t   = a.track;
-    Pattern&  p   = a.seq.patterns[t];
-    auto      add = [](float v, float d) { return std::clamp(v + d, 0.0f, 1.0f); };
-    const float d = fine * 0.05f + coarse * 0.2f;
-    if (f == 0) { // LEN: only changes the length, keeps the notes
-        a.seq.setLength(t, p.length + fine + coarse * 4);
+// Steps a note command and resets its value, or changes the value within the command's range.
+void editFx(SeqNote& n, int cmdDir, int valFine, int valCoarse) {
+    if (cmdDir) {
+        int k   = int(Fx::Count);
+        n.fx    = Fx((int(n.fx) + cmdDir + k) % k);
+        n.fxVal = uint8_t(fxDefault(n.fx));
         return;
     }
-    if (a.isDrum[t]) {
-        DrumGen& g = a.drumGen[t];
-        switch (f) {
-        case D_STYLE: {
-            int n   = int(DrumStyle::Count);
-            g.style = DrumStyle((int(g.style) + fine + coarse + n) % n);
-            break;
-        }
-        case D_DENSITY:   g.density = add(g.density, d); break;
-        case D_VARIATION: g.variation = add(g.variation, d); break;
-        case D_DYNAMICS:  g.dynamics = add(g.dynamics, d); break;
-        case D_SEED:      g.seed = uint32_t(std::max<int64_t>(1, int64_t(g.seed) + fine + coarse * 10)); break;
-        }
-    } else {
-        MelodyGen& g = a.melodyGen[t];
-        switch (f) {
-        case M_OCT:     g.octave = std::clamp(g.octave + fine + coarse, 1, 7); break;
-        case M_DENSITY: g.density = add(g.density, d); break;
-        case M_RANGE:   g.range = add(g.range, d); break;
-        case M_MOTION:  g.motion = add(g.motion, d); break;
-        case M_LENGTH:  g.length = add(g.length, d); break;
-        case M_CHORD:   g.chord = add(g.chord, d); break;
-        case M_DYNAMICS: g.dynamics = add(g.dynamics, d); break;
-        case M_SEED:    g.seed = uint32_t(std::max<int64_t>(1, int64_t(g.seed) + fine + coarse * 10)); break;
-        }
-    }
-    regenerate(a, t);
+    if (n.fx == Fx::None) return;
+    int v = n.fxVal;
+    if (n.fx == Fx::Arp) v = (v & 0xF0) | ((v + valFine) & 0x0F), v = (v + valCoarse * 16) & 0xFF; // y digit, x digit
+    else if (n.fx == Fx::Cha) v += valFine * 5 + valCoarse * 25;
+    else v += valFine + valCoarse * 4;
+    n.fxVal = uint8_t(fxClamp(n.fx, v));
 }
 
-void resetPanel(App& a, int f) {
-    const int t = a.track;
-    if (f == 0) return;
-    if (a.isDrum[t]) {
-        DrumGen def;
-        DrumGen& g = a.drumGen[t];
-        switch (f) {
-        case D_STYLE:     g.style = def.style; break;
-        case D_DENSITY:   g.density = def.density; break;
-        case D_VARIATION: g.variation = def.variation; break;
-        case D_DYNAMICS:  g.dynamics = def.dynamics; break;
-        default: return;
-        }
-    } else {
-        MelodyGen def;
-        MelodyGen& g = a.melodyGen[t];
-        switch (f) {
-        case M_OCT:     g.octave = def.octave; break;
-        case M_DENSITY: g.density = def.density; break;
-        case M_RANGE:   g.range = def.range; break;
-        case M_MOTION:  g.motion = def.motion; break;
-        case M_LENGTH:  g.length = def.length; break;
-        case M_CHORD:   g.chord = def.chord; break;
-        case M_DYNAMICS: g.dynamics = def.dynamics; break;
-        default: return;
-        }
+// What a command does with its value, for the help line.
+std::string fxHelp(const SeqNote& n) {
+    int v = n.fxVal;
+    switch (n.fx) {
+    case Fx::Ret: return fmt("RET: REPEAT EVERY %d TICKS", v);
+    case Fx::Arp: return fmt("ARP: CYCLE +0 +%d +%d SEMITONES", v >> 4, v & 15);
+    case Fx::Kil: return fmt("KIL: CUT AFTER %d TICKS", v);
+    case Fx::Dly: return fmt("DLY: START %d TICKS LATE", v);
+    case Fx::Cha: return fmt("CHA: PLAY %d%% OF THE TIME", v);
+    default:      return "FX: NONE";
     }
-    regenerate(a, t);
 }
 
 // ---------------------------------------------------------------- synth tracker
@@ -151,8 +46,11 @@ void resetPanel(App& a, int f) {
 constexpr int kSynthRowY = 102;
 constexpr int kSynthRowH = 34;
 constexpr int kNoteX     = 76;
-constexpr int kNoteColW  = 136;
-constexpr int kPanelCol  = kSynthCols * 2; // cursor column of the generator panel
+constexpr int kNoteColW  = 236;
+constexpr int kSub       = 4;                   // cursor sub-columns per note column
+constexpr int kSubX[kSub] = {0, 56, 92, 140};   // NOTE, VEL, FX command, FX value
+constexpr int kSubW[kSub] = {52, 24, 44, 32};   // cursor highlight widths (text + margin)
+enum { SUB_NOTE, SUB_VEL, SUB_CMD, SUB_VAL };
 
 // Which steps of column `col` have a note sounding: from a note until the next
 // note or OFF in the column, wrapping around the end of the pattern.
@@ -169,41 +67,85 @@ void soundingSteps(const Pattern& p, int col, bool* out) {
     }
 }
 
+std::string synthCellText(const SeqNote& n, int sub) {
+    if (!n.isNote()) {
+        if (sub == SUB_NOTE) return n.pitch == SeqNote::kOff ? "OFF" : "---";
+        return sub == SUB_VEL ? "-" : sub == SUB_CMD ? "---" : "--";
+    }
+    switch (sub) {
+    case SUB_NOTE: return noteName(n.pitch);
+    case SUB_VEL:  return std::to_string(n.vel);
+    case SUB_CMD:  return fxName(n.fx);
+    default:       return fxValueText(n.fx, n.fxVal);
+    }
+}
+
 void drawSynth(App& a, const Pattern& p, int playStep, bool playing) {
     SDL_Renderer* r = a.renderer;
     const Cursor& c = a.synthCur;
     bool held[kSynthCols][Pattern::kMaxSteps];
     for (int k = 0; k < kSynthCols; ++k) {
-        drawText(r, kNoteX + k * kNoteColW, 74, 2, fmt("NOTE%d", k + 1), kDim);
-        drawText(r, kNoteX + k * kNoteColW + 76, 74, 2, "VEL", kDim);
+        int x = kNoteX + k * kNoteColW;
+        drawText(r, x, 74, 2, fmt("N%d", k + 1), kDim);
+        drawText(r, x + kSubX[SUB_VEL], 74, 2, "V", kDim);
+        drawText(r, x + kSubX[SUB_CMD], 74, 2, "FX", kDim);
         soundingSteps(p, k, held[k]);
     }
     for (int row = 0; row < kPageSteps; ++row) {
-        int step = a.page * kPageSteps + row;
-        int y    = kSynthRowY + row * kSynthRowH;
+        int  step   = a.page * kPageSteps + row;
+        int  y      = kSynthRowY + row * kSynthRowH;
         bool inside = step < p.length;
         SDL_Color bg = !inside ? kBg : row % 4 == 0 ? kPanel2 : kPanel;
         if (inside && playing && playStep == step) bg = {44, 84, 60, 255};
-        fillRect(r, 16, y, kPanelX - 28, kSynthRowH - 3, bg);
+        fillRect(r, 16, y, kW - 32, kSynthRowH - 3, bg);
         drawText(r, 24, y + 9, 2, fmt("%02d", step), row % 4 == 0 ? kText : kDim);
         if (!inside) continue;
         for (int k = 0; k < kSynthCols; ++k) {
             const SeqNote& n = p.steps[step].notes[k];
             // A bar left of the column shows how long each note rings.
             if (held[k][step]) fillRect(r, kNoteX + k * kNoteColW - 10, y, 4, kSynthRowH - 3, kLine);
-            for (int part = 0; part < 2; ++part) {
-                int  x   = kNoteX + k * kNoteColW + part * 76;
-                bool cur = c.row == row && c.col == k * 2 + part;
-                if (cur) fillRect(r, x - 6, y + 2, part ? 44 : 64, kSynthRowH - 7, kCursorBg);
-                std::string s = n.pitch == SeqNote::kEmpty ? (part ? "-" : "---")
-                              : n.pitch == SeqNote::kOff   ? (part ? "-" : "OFF")
-                              : part                       ? std::to_string(n.vel)
-                                                           : noteName(n.pitch);
-                SDL_Color col = cur ? kAccent : n.isNote() ? kText : n.pitch == SeqNote::kOff ? kDim : kLine;
-                drawText(r, x, y + 9, 2, s, col);
+            for (int sub = 0; sub < kSub; ++sub) {
+                int  x   = kNoteX + k * kNoteColW + kSubX[sub];
+                bool cur = c.row == row && c.col == k * kSub + sub;
+                if (cur) fillRect(r, x - 6, y + 2, kSubW[sub] + 12, kSynthRowH - 7, kCursorBg);
+                bool      lit = n.isNote() && (sub < SUB_CMD || n.fx != Fx::None);
+                SDL_Color col = cur ? kAccent : lit ? (sub >= SUB_CMD ? kScopeC : kText)
+                                    : n.pitch == SeqNote::kOff && sub == SUB_NOTE ? kDim : kLine;
+                drawText(r, x, y + 9, 2, synthCellText(n, sub), col);
             }
         }
     }
+    if (c.col % kSub >= SUB_CMD && c.row < kPageSteps) {
+        int step = a.page * kPageSteps + c.row;
+        if (step < p.length && p.steps[step].notes[c.col / kSub].isNote())
+            a.message = fxHelp(p.steps[step].notes[c.col / kSub]);
+    }
+}
+
+void editSynth(App& a, Pattern& p, int fine, int coarse) {
+    const int     t    = a.track;
+    const Cursor& c    = a.synthCur;
+    int           step = a.page * kPageSteps + c.row;
+    if (step >= p.length) return;
+    SeqNote& n = p.steps[step].notes[c.col / kSub];
+    if (!n.isNote()) return;
+    switch (c.col % kSub) {
+    case SUB_NOTE: {
+        int pitch = n.pitch;
+        if (fine) pitch = scaleStep(pitch, fine, scaleInfo(a));
+        pitch   = std::clamp(pitch + coarse * 12, 0, 127);
+        n.pitch = int8_t(pitch);
+        a.lastNote[t] = pitch;
+        break;
+    }
+    case SUB_VEL:
+        n.vel        = uint8_t(std::clamp(n.vel + fine + coarse, 1, kMaxVel));
+        a.lastVel[t] = n.vel;
+        break;
+    case SUB_CMD: editFx(n, fine + coarse, 0, 0); return;
+    case SUB_VAL: editFx(n, 0, fine, coarse); return;
+    }
+    preview(a, t, n.pitch, n.vel);
 }
 
 // ---------------------------------------------------------------- drum grid
@@ -212,9 +154,58 @@ constexpr int kDrumRowY  = 80;
 constexpr int kDrumRowH  = 66;
 constexpr int kDrumCellX = 208;
 constexpr int kDrumCellW = 26;
-constexpr int kDrumPanelCol = kPageSteps; // cursor column of the generator panel
+constexpr int kInfoX     = 640;
 
-void drawDrums(App& a, const Pattern& p, int playStep, bool playing) {
+// The hit under the drum cursor, or null.
+SeqNote* drumHit(App& a, Pattern& p) {
+    const Cursor& c    = a.drumCur;
+    int           step = a.page * kPageSteps + c.col;
+    if (c.col < 0 || step >= p.length) return nullptr;
+    int slot = p.steps[step].find(kDrumBase + c.row);
+    return slot >= 0 ? &p.steps[step].notes[slot] : nullptr;
+}
+
+void drawDrumInfo(App& a, Pattern& p) {
+    SDL_Renderer* r = a.renderer;
+    const Cursor& c = a.drumCur;
+    const int     x = kInfoX;
+    fillRect(r, x, kDrumRowY, kW - x - 16, 8 * kDrumRowH - 6, kPanel);
+    std::string pad = padName(a, a.track, c.row);
+    if (c.col < 0) {
+        drawText(r, x + 16, kDrumRowY + 14, 3, pad, kAccent);
+        drawText(r, x + 16, kDrumRowY + 60, 2, "EUCLID ROW", kText);
+        drawText(r, x + 16, kDrumRowY + 92, 2, "A+LEFT/RIGHT: HITS", kDim);
+        drawText(r, x + 16, kDrumRowY + 116, 2, "A+UP/DOWN: ROTATE", kDim);
+        drawText(r, x + 16, kDrumRowY + 140, 2, "A: PLAY   B+A: CLEAR ROW", kDim);
+        return;
+    }
+    int step = a.page * kPageSteps + c.col;
+    drawText(r, x + 16, kDrumRowY + 14, 3, fmt("%s  %02d", pad.c_str(), step), kAccent);
+    SeqNote* n = drumHit(a, p);
+    int      y = kDrumRowY + 64;
+    if (!n) {
+        drawText(r, x + 16, y, 2, "NO HIT  (A: PUT ONE)", kDim);
+    } else {
+        drawText(r, x + 16, y, 2, "VEL", kDim);
+        drawText(r, x + 110, y, 2, std::to_string(n->vel), kText);
+        drawBar(r, x + 150, y + 2, 150, 10, float(n->vel) / kMaxVel, kScopeC);
+        drawText(r, x + 16, y + 36, 2, "FX", kDim);
+        drawText(r, x + 110, y + 36, 2, std::string(fxName(n->fx)) + " " + fxValueText(n->fx, n->fxVal),
+                 n->fx == Fx::None ? kLine : kScopeC);
+        std::string help = fxHelp(*n);
+        size_t      cut  = help.find(':');
+        drawText(r, x + 16, y + 64, 2, help.substr(cut + 2), kDim);
+    }
+    y = kDrumRowY + 200;
+    const char* lines[] = {"A: PUT / PLAY", "A+PAD: VELOCITY", "B+LEFT/RIGHT: FX", "B+UP/DOWN: FX VALUE", "B+A: DELETE", "",
+                           "RET ROLL   ARP ARPEGGIO", "KIL CUT    DLY DELAY", "CHA CHANCE", "12 TICKS = 1 STEP"};
+    for (const char* l : lines) {
+        drawText(r, x + 16, y, 2, l, kDim);
+        y += 26;
+    }
+}
+
+void drawDrums(App& a, Pattern& p, int playStep, bool playing) {
     SDL_Renderer* r = a.renderer;
     const Cursor& c = a.drumCur;
     const int     t = a.track;
@@ -237,10 +228,12 @@ void drawDrums(App& a, const Pattern& p, int playStep, bool playing) {
             SDL_Color bg = !inside ? kBg : i % 4 == 0 ? kPanel2 : kPanel;
             if (inside && playing && playStep == step) bg = {44, 84, 60, 255};
             fillRect(r, x, y, kDrumCellW - 3, kDrumRowH - 6, bg);
-            if (slot >= 0) { // height follows velocity
-                int full = kDrumRowH - 22;
-                int h    = std::max(4, full * p.steps[step].notes[slot].vel / kMaxVel);
-                fillRect(r, x + 3, y + 8 + full - h, kDrumCellW - 9, h, a.seq.audible(t) ? kScopeC : kDim);
+            if (slot >= 0) { // height follows velocity; a command shows as its initial on top
+                const SeqNote& n    = p.steps[step].notes[slot];
+                int            full = kDrumRowH - 22;
+                int            h    = std::max(4, full * n.vel / kMaxVel);
+                fillRect(r, x + 3, y + 12 + full - h, kDrumCellW - 9, h, a.seq.audible(t) ? kScopeC : kDim);
+                if (n.fx != Fx::None) drawText(r, x + 8, y + 2, 1, std::string(1, fxName(n.fx)[0]), kAccent);
             }
             if (cur) {
                 strokeRect(r, x, y, kDrumCellW - 3, kDrumRowH - 6, kAccent);
@@ -248,6 +241,7 @@ void drawDrums(App& a, const Pattern& p, int playStep, bool playing) {
             }
         }
     }
+    drawDrumInfo(a, p);
 }
 
 // ---------------------------------------------------------------- screen ops
@@ -262,26 +256,19 @@ void draw(App& a) {
         playStep = a.seq.currentStep(a.track);
         playing  = a.seq.playing();
     }
-    if (a.isDrum[a.track]) {
-        drawDrums(a, p, playStep, playing);
-        drawPanel(a, a.drumCur.col == kDrumPanelCol ? a.drumCur.row : -1);
-    } else {
-        drawSynth(a, p, playStep, playing);
-        drawPanel(a, a.synthCur.col == kPanelCol ? a.synthCur.row : -1);
-    }
+    if (a.isDrum[a.track]) drawDrums(a, p, playStep, playing);
+    else drawSynth(a, p, playStep, playing);
 }
 
 void move(App& a, int dx, int dy) {
     if (a.isDrum[a.track]) {
         Cursor& c = a.drumCur;
-        c.col     = std::clamp(c.col + dx, -1, kDrumPanelCol);
-        int rows  = c.col == kDrumPanelCol ? D_COUNT : kDrumPads;
-        c.row     = std::clamp(c.row + dy, 0, rows - 1);
+        c.col     = std::clamp(c.col + dx, -1, kPageSteps - 1);
+        c.row     = std::clamp(c.row + dy, 0, kDrumPads - 1);
     } else {
         Cursor& c = a.synthCur;
-        c.col     = std::clamp(c.col + dx, 0, kPanelCol);
-        int rows  = c.col == kPanelCol ? M_COUNT : kPageSteps;
-        c.row     = std::clamp(c.row + dy, 0, rows - 1);
+        c.col     = std::clamp(c.col + dx, 0, kSynthCols * kSub - 1);
+        c.row     = std::clamp(c.row + dy, 0, kPageSteps - 1);
     }
 }
 
@@ -289,74 +276,55 @@ void edit(App& a, int fine, int coarse) {
     const int t = a.track;
     AudioLock lock(a.audio);
     Pattern&  p = a.seq.patterns[t];
-    if (a.isDrum[t]) {
-        const Cursor& c = a.drumCur;
-        if (c.col == kDrumPanelCol) {
-            editPanel(a, c.row, fine, coarse);
-        } else if (c.col < 0) { // Euclid: left / right = hits, up / down = rotate
-            int& rot = a.euclidRot[t][c.row];
-            rot      = ((rot + coarse) % p.length + p.length) % p.length;
-            euclidRow(p, c.row, rowHits(p, c.row) + fine, rot);
-        } else if (int step = a.page * kPageSteps + c.col; step < p.length) { // velocity of a hit
-            int slot = p.steps[step].find(kDrumBase + c.row);
-            if (slot < 0) return;
-            SeqNote& n = p.steps[step].notes[slot];
-            n.vel      = uint8_t(std::clamp(n.vel + fine + coarse, 1, kMaxVel));
-            a.lastVel[t] = n.vel;
-            preview(a, t, n.pitch, n.vel);
-        }
+    if (!a.isDrum[t]) {
+        editSynth(a, p, fine, coarse);
         return;
     }
-    const Cursor& c = a.synthCur;
-    if (c.col == kPanelCol) {
-        editPanel(a, c.row, fine, coarse);
-        return;
+    const Cursor& c = a.drumCur;
+    if (c.col < 0) { // Euclid: left / right = hits, up / down = rotate
+        int& rot = a.euclidRot[t][c.row];
+        rot      = ((rot + coarse) % p.length + p.length) % p.length;
+        euclidRow(p, c.row, rowHits(p, c.row) + fine, rot);
+    } else if (SeqNote* n = drumHit(a, p)) {
+        n->vel       = uint8_t(std::clamp(n->vel + fine + coarse, 1, kMaxVel));
+        a.lastVel[t] = n->vel;
+        preview(a, t, n->pitch, n->vel);
     }
-    int step = a.page * kPageSteps + c.row;
-    if (step >= p.length) return;
-    SeqNote& n = p.steps[step].notes[c.col / 2];
-    if (!n.isNote()) return;
-    if (c.col % 2 == 0) {
-        int pitch = n.pitch;
-        if (fine) pitch = scaleStep(pitch, fine, scaleInfo(a));
-        pitch   = std::clamp(pitch + coarse * 12, 0, 127);
-        n.pitch = int8_t(pitch);
-        a.lastNote[t] = pitch;
-    } else {
-        n.vel        = uint8_t(std::clamp(n.vel + fine + coarse, 1, kMaxVel));
-        a.lastVel[t] = n.vel;
-    }
-    preview(a, t, n.pitch, n.vel);
+}
+
+// B + D-pad on a drum hit: left / right picks the command, up / down its value.
+void option(App& a, int fine, int coarse) {
+    const int t = a.track;
+    if (!a.isDrum[t]) return;
+    AudioLock lock(a.audio);
+    if (SeqNote* n = drumHit(a, a.seq.patterns[t])) editFx(*n, fine, 0, coarse);
 }
 
 void enter(App& a) {
     const int t = a.track;
     AudioLock lock(a.audio);
     Pattern&  p = a.seq.patterns[t];
-    pushUndo(a, t); // A starts an edit gesture; undo returns to before it
     if (a.isDrum[t]) {
         const Cursor& c = a.drumCur;
         if (c.col < 0) {
             preview(a, t, kDrumBase + c.row);
-        } else if (c.col < kDrumPanelCol) {
-            int step = a.page * kPageSteps + c.col;
-            if (step >= p.length) return;
-            SeqStep& st = p.steps[step];
-            if (st.find(kDrumBase + c.row) >= 0) {
-                st.remove(kDrumBase + c.row);
-            } else {
-                st.add(kDrumBase + c.row, a.lastVel[t]);
-                preview(a, t, kDrumBase + c.row, a.lastVel[t]);
-            }
+        } else if (SeqNote* n = drumHit(a, p)) {
+            preview(a, t, n->pitch, n->vel); // A never removes a hit; B + A does
+        } else if (a.page * kPageSteps + c.col < p.length) {
+            pushUndo(a, t);
+            p.steps[a.page * kPageSteps + c.col].add(kDrumBase + c.row, a.lastVel[t]);
+            preview(a, t, kDrumBase + c.row, a.lastVel[t]);
         }
         return;
     }
-    const Cursor& c = a.synthCur;
-    if (c.col == kPanelCol) return;
-    int step = a.page * kPageSteps + c.row;
+    const Cursor& c    = a.synthCur;
+    int           step = a.page * kPageSteps + c.row;
     if (step >= p.length) return;
-    SeqNote& n = p.steps[step].notes[c.col / 2];
-    if (!n.isNote()) n = {int8_t(a.lastNote[t]), uint8_t(a.lastVel[t])}; // drop in the last note used
+    SeqNote& n = p.steps[step].notes[c.col / kSub];
+    if (!n.isNote()) {
+        pushUndo(a, t);
+        n = {int8_t(a.lastNote[t]), uint8_t(a.lastVel[t]), Fx::None, 0}; // drop in the last note used
+    }
     a.lastNote[t] = n.pitch;
     a.lastVel[t]  = n.vel;
     preview(a, t, n.pitch, n.vel);
@@ -369,21 +337,22 @@ void clear(App& a) {
     pushUndo(a, t);
     if (a.isDrum[t]) {
         const Cursor& c = a.drumCur;
-        if (c.col == kDrumPanelCol) resetPanel(a, c.row);
-        else if (c.col < 0) euclidRow(p, c.row, 0, 0);
-        else if (a.page * kPageSteps + c.col < p.length) p.steps[a.page * kPageSteps + c.col].remove(kDrumBase + c.row);
+        if (c.col < 0) euclidRow(p, c.row, 0, 0);
+        else if (SeqNote* n = drumHit(a, p)) *n = SeqNote{};
         return;
     }
-    const Cursor& c = a.synthCur;
-    if (c.col == kPanelCol) {
-        resetPanel(a, c.row);
-        return;
-    }
-    int step = a.page * kPageSteps + c.row;
+    const Cursor& c    = a.synthCur;
+    int           step = a.page * kPageSteps + c.row;
     if (step >= p.length) return;
-    SeqNote& n = p.steps[step].notes[c.col / 2];
-    if (c.col % 2 == 1) { // VEL: back to the default
+    SeqNote& n = p.steps[step].notes[c.col / kSub];
+    switch (c.col % kSub) {
+    case SUB_VEL: // back to the default
         if (n.isNote()) n.vel = kDefaultVel;
+        return;
+    case SUB_CMD:
+    case SUB_VAL:
+        n.fx    = Fx::None;
+        n.fxVal = 0;
         return;
     }
     // NOTE: a note goes, an empty cell becomes OFF, an OFF goes.
@@ -394,6 +363,6 @@ void clear(App& a) {
 } // namespace
 
 const ScreenOps kPatternScreen = {
-    "PATTERN", draw, move, edit, enter, clear,
-    "A:PUT/HIT  A+PAD:CHANGE/VEL  B+A:DEL/OFF  X:GEN Y:MUTATE  L1/R1:TRACK  L2/R2:PG",
+    "PATTERN", draw, move, edit, enter, clear, option,
+    "A:PUT  A+PAD:CHANGE  B+A:DEL/OFF  X:GENERATE  Y:MUTATE  L1/R1:TRACK  L2/R2:PAGE",
 };
