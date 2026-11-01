@@ -60,7 +60,7 @@ public:
 
     void init(int sampleRate);
 
-    void noteOn(int key, int note) override;
+    void noteOn(int key, int note, float gain) override;
     void noteOff(int key) override;
     void allOff() override;
     void render(float* out, int frames) override;
@@ -76,6 +76,7 @@ private:
         float phase2 = 0.0f;
         float env    = 0.0f;
         float fenv   = 0.0f; // filter envelope, 1 at note-on, decays to 0
+        float gain   = 1.0f; // velocity
         bool  gate   = false;
         float ic1    = 0.0f; // SVF integrator states
         float ic2    = 0.0f;

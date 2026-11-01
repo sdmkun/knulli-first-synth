@@ -18,13 +18,14 @@ struct DrumGen {
     DrumStyle style     = DrumStyle::Four;
     float     density   = 0.5f; // 0 = only the backbone hits, 1 = busy
     float     variation = 0.3f; // ghost notes and end-of-bar fills
+    float     dynamics  = 0.5f; // 0 = every hit at the default velocity, 1 = strong accents and quiet ghosts
     uint32_t  seed      = 1;
 };
 
 // Replaces every drum row of `p` (its length is kept).
 void generateDrums(Pattern& p, const DrumGen& g);
 
-// Replaces one drum row with an evenly spread (Euclidean) rhythm.
+// Replaces one drum row with an evenly spread (Euclidean) rhythm; hits already there keep their velocity.
 void euclidRow(Pattern& p, int pad, int hits, int rotate);
 int  rowHits(const Pattern& p, int pad);
 
@@ -39,8 +40,9 @@ struct MelodyGen {
     float    density = 0.5f;
     float    range   = 0.4f; // how far the line may wander (about 3 to 14 scale degrees)
     float    motion  = 0.3f; // 0 = stepwise, 1 = leaps
-    float    length  = 0.3f; // 0 = staccato, 1 = long notes
+    float    length  = 0.3f; // 0 = staccato, 1 = long notes (placed as OFFs; a note never outlasts the next)
     float    chord   = 0.0f; // chance a note becomes a triad
+    float    dynamics = 0.4f; // how much velocity follows the beat (and varies)
     uint32_t seed    = 1;
 };
 

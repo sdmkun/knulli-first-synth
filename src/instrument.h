@@ -1,15 +1,16 @@
 #pragma once
 
 // What a track plays: the subtractive Synth or a DrumKit. The sequencer and the
-// pads only talk to this interface. render() runs on the audio thread; the
+// UI only talk to this interface. render() runs on the audio thread; the
 // rest is called with the audio device locked.
 class Instrument {
 public:
     virtual ~Instrument() = default;
 
-    // `key` identifies who started the note (a pad, or a sequencer slot) so the
-    // matching noteOff finds it. `note` is a MIDI note number.
-    virtual void noteOn(int key, int note) = 0;
+    // `key` identifies who started the note (an audition, or a sequencer column) so
+    // the matching noteOff finds it. `note` is a MIDI note number; `gain` comes
+    // from the step's velocity (1 = default level).
+    virtual void noteOn(int key, int note, float gain) = 0;
     virtual void noteOff(int key)          = 0;
     virtual void allOff()                  = 0;
 

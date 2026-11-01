@@ -51,7 +51,7 @@ float* paramValue(Params& p, int id) {
 std::string seconds(float s) { return s < 1.0f ? fmt("%dMS", int(s * 1000.0f + 0.5f)) : fmt("%.2fS", s); }
 std::string percent(float n) { return fmt("%d%%", int(n * 100.0f + 0.5f)); }
 
-constexpr int kPreviewKey = 90; // instrument key for auditions; pads used 0..7, the sequencer 100+
+constexpr int kPreviewKey = 90; // instrument key for auditions; the sequencer uses 100+
 
 } // namespace
 
@@ -83,13 +83,11 @@ void pushUndo(App& a, int t) {
 void toggleUndo(App& a, int t) {
     if (!a.hasUndo[t]) return;
     std::swap(a.undo[t], a.seq.patterns[t]);
-    for (SeqStep& s : a.seq.patterns[t].steps)
-        for (SeqNote& n : s.notes) n.fresh = false;
 }
 
-void preview(App& a, int t, int note) {
+void preview(App& a, int t, int note, int vel) {
     if (a.previewKey >= 0) a.inst[a.previewTrack]->noteOff(a.previewKey);
-    a.inst[t]->noteOn(kPreviewKey, note);
+    a.inst[t]->noteOn(kPreviewKey, note, velocityGain(vel));
     a.previewKey   = kPreviewKey;
     a.previewTrack = t;
     a.previewOffAt = SDL_GetTicks() + 250;

@@ -16,7 +16,7 @@ constexpr int kTitleY = 104;
 constexpr int kRowY   = 160;
 constexpr int kRowH   = 30;
 
-// "C4 E4 G4+" for a synth step; one letter per drum pad ("K.H.....") for a drum step.
+// "C4 E4 G4+" (or "OFF") for a synth step; one letter per drum pad ("K.H.....") for a drum step.
 std::string cellText(const App& a, int t, const SeqStep& st) {
     if (a.isDrum[t]) {
         std::string s(kDrumPads, '.');
@@ -26,7 +26,7 @@ std::string cellText(const App& a, int t, const SeqStep& st) {
     }
     SeqNote notes[SeqStep::kMaxNotes];
     int     n = st.sorted(notes);
-    if (n == 0) return "---";
+    if (n == 0) return st.hasOff() ? "OFF" : "---";
     std::string s;
     for (int i = 0; i < std::min(n, 3); ++i) s += (i ? " " : "") + noteName(notes[i].pitch);
     if (n > 3) s += "+";

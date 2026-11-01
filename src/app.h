@@ -98,6 +98,7 @@ struct App {
     int    scale  = 1; // MINOR
     int    root   = 0; // C
     int    lastNote[kTracks] = {60, 36, 60, 60}; // what A drops into an empty synth cell
+    int    lastVel[kTracks]  = {kDefaultVel, kDefaultVel, kDefaultVel, kDefaultVel}; // and how hard
 
     Cursor seqCur{0, 0};  // row -1 = BPM / KEY / SCALE fields
     Cursor synthCur;      // cols 0..7 = note / length pairs, 8 = generator panel
@@ -135,7 +136,7 @@ std::string padName(const App& a, int t, int pad);
 Pattern&    pattern(App& a, int t);
 void        pushUndo(App& a, int t);          // locked
 void        toggleUndo(App& a, int t);        // locked
-void        preview(App& a, int t, int note); // locked; auditions a note for a moment
+void        preview(App& a, int t, int note, int vel = kDefaultVel); // locked; auditions a note for a moment
 void        loadPreset(App& a, int t, int index);
 void        loadKit(App& a, int t, int index);
 void        setTrackType(App& a, int t, bool drum);

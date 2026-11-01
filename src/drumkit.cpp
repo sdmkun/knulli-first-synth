@@ -138,7 +138,7 @@ void DrumKit::setKit(const Kit* kit) {
     kit_ = kit;
 }
 
-void DrumKit::noteOn(int, int note) {
+void DrumKit::noteOn(int, int note, float gain) {
     const int pad = note - kBaseNote;
     if (!kit_ || pad < 0 || pad >= Kit::kPads) return;
     const Sample& s = kit_->pads[pad];
@@ -157,7 +157,7 @@ void DrumKit::noteOn(int, int note) {
     v->end    = std::max(v->pos + 1.0, std::clamp(ps.end, 0.0f, 1.0f) * len);
     v->end    = std::min(v->end, len - 1.0);
     v->inc    = double(s.rate) / sampleRate_ * std::pow(2.0, ps.pitch / 12.0);
-    v->gain   = ps.volume * ps.volume;
+    v->gain   = ps.volume * ps.volume * gain;
     v->age    = ++counter_;
 }
 

@@ -403,7 +403,6 @@ int main(int argc, char* argv[]) {
         for (Synth& s : a.synths) s.init(have.freq);
         for (DrumKit& d : a.drums) d.init(have.freq);
         a.seq.init(have.freq);
-        a.seq.latencyFrames = have.samples;
         SDL_Log("audio: %d Hz, %d ch, %d samples", have.freq, have.channels, have.samples);
     } else {
         SDL_Log("SDL_OpenAudioDevice failed: %s", SDL_GetError());

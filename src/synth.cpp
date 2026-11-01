@@ -110,7 +110,7 @@ void Synth::init(int sampleRate) {
     silentRun_   = 0;
 }
 
-void Synth::noteOn(int key, int note) {
+void Synth::noteOn(int key, int note, float gain) {
     const float freq = 440.0f * std::pow(2.0f, (note - 69) / 12.0f);
     Voice* target = nullptr;
     for (Voice& v : voices_)
@@ -130,6 +130,7 @@ void Synth::noteOn(int key, int note) {
     target->freq = freq;
     target->gate = true;
     target->fenv = 1.0f;
+    target->gain = gain;
 }
 
 void Synth::noteOff(int key) {
@@ -265,7 +266,7 @@ void Synth::render(float* out, int frames) {
                 v.ic1 = 2.0f * v1 - v.ic1;
                 v.ic2 = 2.0f * v2 - v.ic2;
 
-                mix[i] += v2 * v.env;
+                mix[i] += v2 * v.env * v.gain;
             }
             v.fenv *= fenvBlockMul;
         }

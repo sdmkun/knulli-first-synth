@@ -43,10 +43,22 @@ const StyleTable kStyles[] = {
 
 bool hasHit(const Pattern& p, int pad, int step) { return p.steps[step].find(kDrumBase + pad) >= 0; }
 
-void setHit(Pattern& p, int pad, int step, bool on) {
-    if (on) p.steps[step].add(kDrumBase + pad, 1);
-    else p.steps[step].remove(kDrumBase + pad);
+// Adds a hit (an existing one keeps its velocity) or removes it.
+void setHit(Pattern& p, int pad, int step, bool on, int vel = kDefaultVel) {
+    if (!on) p.steps[step].remove(kDrumBase + pad);
+    else if (!hasHit(p, pad, step)) p.steps[step].add(kDrumBase + pad, vel);
 }
+
+// Velocity for an accent of -1 (quietest) .. +1 (loudest), scaled by `dynamics`.
+// The scale is lopsided because the default level sits near the top.
+int dynVel(float accent, float dynamics) {
+    accent    = std::clamp(accent, -1.0f, 1.0f);
+    float off = accent > 0.0f ? accent * 2.0f : accent * 4.0f;
+    return std::clamp(int(std::lround(kDefaultVel + off * dynamics)), 1, kMaxVel);
+}
+
+// Where a step sits in the beat: downbeats lean loud, off-beat sixteenths quiet.
+float beatAccent(int step) { return step % 4 == 0 ? 0.5f : step % 2 == 1 ? -0.5f : 0.0f; }
 
 bool inScale(int pitch, const ScaleInfo& s) {
     int pc = ((pitch - s.root) % 12 + 12) % 12;
@@ -61,16 +73,8 @@ int degreePitch(int degree, int octave, const ScaleInfo& s) {
     return 12 * (octave + 1) + s.root + s.steps[idx] + 12 * oct;
 }
 
-// Gives each note its full length but cuts it where the next note starts, so lines stay monophonic-ish.
-void trimToNext(Pattern& p) {
-    for (int i = 0; i < p.length; ++i) {
-        SeqStep& st = p.steps[i];
-        if (st.empty()) continue;
-        int gap = 1;
-        while (gap < p.length && p.steps[(i + gap) % p.length].empty()) ++gap;
-        for (SeqNote& n : st.notes)
-            if (n.pitch >= 0) n.len = uint8_t(std::min<int>(n.len, gap));
-    }
+void setOff(SeqStep& st, int col) {
+    if (st.notes[col].pitch == SeqNote::kEmpty) st.notes[col].pitch = SeqNote::kOff;
 }
 
 } // namespace
@@ -114,6 +118,10 @@ void generateDrums(Pattern& p, const DrumGen& g) {
             int hits = int(std::round(base[pad] * p.length / 16.0f * (0.3f + 1.4f * g.density))) + rng.range(2);
             if (pad > 1 && rng.uni() > 0.4f + g.density * 0.6f) hits = 0;
             euclidRow(p, pad, hits, pad == 0 ? 0 : rng.range(p.length));
+            for (int i = 0; i < p.length; ++i) {
+                int c = p.steps[i].find(kDrumBase + pad);
+                if (c >= 0) p.steps[i].notes[c].vel = uint8_t(dynVel(beatAccent(i) + (rng.uni() - 0.5f) * 0.6f, g.dynamics));
+            }
         }
     } else {
         const StyleTable& t = kStyles[int(g.style)];
@@ -121,7 +129,8 @@ void generateDrums(Pattern& p, const DrumGen& g) {
             for (int i = 0; i < p.length; ++i) {
                 int   d      = t.rows[pad][i % 16] - '0';
                 float chance = d >= 9 ? 1.0f : d / 10.0f * g.density * 1.6f;
-                if (rng.uni() < chance) setHit(p, pad, i, true);
+                float accent = d >= 9 ? 0.6f : beatAccent(i) + (rng.uni() - 0.5f) * 0.6f;
+                if (rng.uni() < chance) setHit(p, pad, i, true, dynVel(accent, g.dynamics));
             }
         }
     }
@@ -129,13 +138,13 @@ void generateDrums(Pattern& p, const DrumGen& g) {
     // Variation: ghost notes on snare / tom / rim, and fills in the last beat of some bars.
     for (int i = 0; i < p.length; ++i) {
         for (int pad : {1, 5, 6})
-            if (rng.uni() < g.variation * 0.08f) setHit(p, pad, i, true);
+            if (rng.uni() < g.variation * 0.08f) setHit(p, pad, i, true, dynVel(-1.0f, g.dynamics));
     }
     for (int bar = 0; bar * 16 < p.length; ++bar) {
         if (rng.uni() >= g.variation * 0.5f) continue;
         int fillPad = rng.uni() < 0.5f ? 1 : 5;
-        for (int i = bar * 16 + 12; i < std::min(bar * 16 + 16, p.length); ++i)
-            if (rng.uni() < 0.6f) setHit(p, fillPad, i, true);
+        for (int i = bar * 16 + 12; i < std::min(bar * 16 + 16, p.length); ++i) // a crescendo into the next bar
+            if (rng.uni() < 0.6f) setHit(p, fillPad, i, true, dynVel((i % 16 - 13.5f) * 0.5f, g.dynamics));
     }
 }
 
@@ -145,6 +154,7 @@ void generateMelody(Pattern& p, const MelodyGen& g, const ScaleInfo& s) {
     const int maxDeg  = 3 + int(g.range * 11.0f);
     const int maxJump = 1 + int(g.motion * 5.0f);
     int       deg     = rng.range(std::min(maxDeg, s.count) + 1);
+    int       dur[Pattern::kMaxSteps] = {}; // intended length of the note starting on each step
 
     for (int i = 0; i < p.length; ++i) {
         float weight = i % 4 == 0 ? 1.0f : i % 2 == 0 ? 0.6f : 0.35f;
@@ -157,14 +167,26 @@ void generateMelody(Pattern& p, const MelodyGen& g, const ScaleInfo& s) {
         if (deg > maxDeg) deg = 2 * maxDeg - deg;    // and at the top
         deg = std::clamp(deg, 0, maxDeg);
 
-        int len = 1 + int(g.length * 7.0f * (0.5f + rng.uni()));
-        p.steps[i].add(degreePitch(deg, g.octave, s), len);
+        dur[i]  = 1 + int(g.length * 7.0f * (0.5f + rng.uni()));
+        int vel = dynVel(beatAccent(i) + (rng.uni() - 0.5f) * 0.6f, g.dynamics);
+        p.steps[i].add(degreePitch(deg, g.octave, s), vel);
         if (rng.uni() < g.chord) {
-            p.steps[i].add(degreePitch(deg + 2, g.octave, s), len);
-            p.steps[i].add(degreePitch(deg + 4, g.octave, s), len);
+            p.steps[i].add(degreePitch(deg + 2, g.octave, s), vel);
+            p.steps[i].add(degreePitch(deg + 4, g.octave, s), vel);
         }
     }
-    trimToNext(p);
+
+    // End each note with an OFF after its length, or at the next note if that comes first.
+    // A next note only ends its own columns, so a chord followed by a single note
+    // also needs OFFs in the columns the single note leaves free.
+    for (int i = 0; i < p.length; ++i) {
+        if (p.steps[i].count() == 0) continue;
+        int gap = 1;
+        while (gap < p.length && p.steps[(i + gap) % p.length].count() == 0) ++gap;
+        SeqStep& end = p.steps[(i + std::min(dur[i], gap)) % p.length];
+        for (int c = 0; c < SeqStep::kMaxNotes; ++c)
+            if (p.steps[i].notes[c].isNote()) setOff(end, c);
+    }
 }
 
 int scaleStep(int pitch, int dir, const ScaleInfo& s) {
@@ -182,12 +204,19 @@ void mutateDrums(Pattern& p, uint32_t seed, float amount) {
         for (int i = 0; i < p.length; ++i) {
             bool backbone = (pad == 0 && i % 8 == 0) || (pad == 1 && i % 8 == 4);
             if (backbone || rng.uni() >= amount * 0.12f) continue;
-            if (hasHit(p, pad, i)) {
-                // Usually nudge the hit to a neighbouring step, sometimes drop it.
+            int c = p.steps[i].find(kDrumBase + pad);
+            if (c >= 0) {
+                // Nudge the hit to a neighbouring step, change how hard it is, or drop it.
+                int   vel = p.steps[i].notes[c].vel;
+                float r   = rng.uni();
+                if (r < 0.35f) {
+                    p.steps[i].notes[c].vel = uint8_t(std::clamp(vel + (rng.uni() < 0.5f ? 1 : -1), 1, kMaxVel));
+                    continue;
+                }
                 setHit(p, pad, i, false);
-                if (rng.uni() < 0.6f) setHit(p, pad, (i + (rng.uni() < 0.5f ? 1 : p.length - 1)) % p.length, true);
+                if (r < 0.75f) setHit(p, pad, (i + (rng.uni() < 0.5f ? 1 : p.length - 1)) % p.length, true, vel);
             } else if (rng.uni() < 0.5f) {
-                setHit(p, pad, i, true);
+                setHit(p, pad, i, true, 3 + rng.range(4));
             }
         }
     }
@@ -199,14 +228,18 @@ void mutateMelody(Pattern& p, const ScaleInfo& s, uint32_t seed, float amount) {
     for (int i = 0; i < p.length; ++i) {
         SeqStep& st = p.steps[i];
         for (SeqNote& n : st.notes) {
-            if (n.pitch < 0) continue;
+            if (!n.isNote()) continue;
             last = n.pitch;
             if (rng.uni() >= amount * 0.25f) continue;
             float r = rng.uni();
-            if (r < 0.7f) n.pitch = int8_t(scaleStep(n.pitch, rng.uni() < 0.5f ? 1 : -1, s));
-            else n = SeqNote{}; // drop
+            if (r < 0.5f) n.pitch = int8_t(scaleStep(n.pitch, rng.uni() < 0.5f ? 1 : -1, s));
+            else if (r < 0.8f) n.vel = uint8_t(std::clamp(n.vel + (rng.uni() < 0.5f ? 1 : -1), 1, kMaxVel));
+            else n.pitch = SeqNote::kOff; // drop it, leaving a rest
         }
-        if (st.empty() && last >= 0 && i % 2 == 0 && rng.uni() < amount * 0.1f)
-            st.add(scaleStep(last, rng.uni() < 0.5f ? 1 : -1, s), 1 + rng.range(2));
+        if (st.empty() && last >= 0 && i % 2 == 0 && rng.uni() < amount * 0.1f) {
+            st.add(scaleStep(last, rng.uni() < 0.5f ? 1 : -1, s), kDefaultVel - 1);
+            int end = i + 1 + rng.range(2); // a short added note, not one that rings to the next
+            if (end < p.length) setOff(p.steps[end], 0);
+        }
     }
 }

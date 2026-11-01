@@ -15,11 +15,11 @@ constexpr int kTop    = 66;
 
 // ---------------------------------------------------------------- generator panels
 
-enum MelodyField { M_LEN, M_OCT, M_DENSITY, M_RANGE, M_MOTION, M_LENGTH, M_CHORD, M_SEED, M_COUNT };
-const char* kMelodyNames[M_COUNT] = {"LEN", "OCT", "DENSITY", "RANGE", "MOTION", "LENGTH", "CHORD", "SEED"};
+enum MelodyField { M_LEN, M_OCT, M_DENSITY, M_RANGE, M_MOTION, M_LENGTH, M_CHORD, M_DYNAMICS, M_SEED, M_COUNT };
+const char* kMelodyNames[M_COUNT] = {"LEN", "OCT", "DENSITY", "RANGE", "MOTION", "LENGTH", "CHORD", "DYNAMICS", "SEED"};
 
-enum DrumField { D_LEN, D_STYLE, D_DENSITY, D_VARIATION, D_SEED, D_COUNT };
-const char* kDrumNames[D_COUNT] = {"LEN", "STYLE", "DENSITY", "VARIATION", "SEED"};
+enum DrumField { D_LEN, D_STYLE, D_DENSITY, D_VARIATION, D_DYNAMICS, D_SEED, D_COUNT };
+const char* kDrumNames[D_COUNT] = {"LEN", "STYLE", "DENSITY", "VARIATION", "DYNAMICS", "SEED"};
 
 int panelCount(const App& a) { return a.isDrum[a.track] ? int(D_COUNT) : int(M_COUNT); }
 
@@ -37,6 +37,7 @@ std::string panelValue(const App& a, int f, float& bar) {
         case D_STYLE:     return drumStyleName(g.style);
         case D_DENSITY:   bar = g.density; return pct(g.density);
         case D_VARIATION: bar = g.variation; return pct(g.variation);
+        case D_DYNAMICS:  bar = g.dynamics; return pct(g.dynamics);
         case D_SEED:      return std::to_string(g.seed);
         }
         return "";
@@ -50,6 +51,7 @@ std::string panelValue(const App& a, int f, float& bar) {
     case M_MOTION:  bar = g.motion; return pct(g.motion);
     case M_LENGTH:  bar = g.length; return pct(g.length);
     case M_CHORD:   bar = g.chord; return pct(g.chord);
+    case M_DYNAMICS: bar = g.dynamics; return pct(g.dynamics);
     case M_SEED:    return std::to_string(g.seed);
     }
     return "";
@@ -95,6 +97,7 @@ void editPanel(App& a, int f, int fine, int coarse) {
         }
         case D_DENSITY:   g.density = add(g.density, d); break;
         case D_VARIATION: g.variation = add(g.variation, d); break;
+        case D_DYNAMICS:  g.dynamics = add(g.dynamics, d); break;
         case D_SEED:      g.seed = uint32_t(std::max<int64_t>(1, int64_t(g.seed) + fine + coarse * 10)); break;
         }
     } else {
@@ -106,6 +109,7 @@ void editPanel(App& a, int f, int fine, int coarse) {
         case M_MOTION:  g.motion = add(g.motion, d); break;
         case M_LENGTH:  g.length = add(g.length, d); break;
         case M_CHORD:   g.chord = add(g.chord, d); break;
+        case M_DYNAMICS: g.dynamics = add(g.dynamics, d); break;
         case M_SEED:    g.seed = uint32_t(std::max<int64_t>(1, int64_t(g.seed) + fine + coarse * 10)); break;
         }
     }
@@ -122,6 +126,7 @@ void resetPanel(App& a, int f) {
         case D_STYLE:     g.style = def.style; break;
         case D_DENSITY:   g.density = def.density; break;
         case D_VARIATION: g.variation = def.variation; break;
+        case D_DYNAMICS:  g.dynamics = def.dynamics; break;
         default: return;
         }
     } else {
@@ -134,6 +139,7 @@ void resetPanel(App& a, int f) {
         case M_MOTION:  g.motion = def.motion; break;
         case M_LENGTH:  g.length = def.length; break;
         case M_CHORD:   g.chord = def.chord; break;
+        case M_DYNAMICS: g.dynamics = def.dynamics; break;
         default: return;
         }
     }
@@ -148,12 +154,29 @@ constexpr int kNoteX     = 76;
 constexpr int kNoteColW  = 136;
 constexpr int kPanelCol  = kSynthCols * 2; // cursor column of the generator panel
 
+// Which steps of column `col` have a note sounding: from a note until the next
+// note or OFF in the column, wrapping around the end of the pattern.
+void soundingSteps(const Pattern& p, int col, bool* out) {
+    bool on = false;
+    for (int i = 0; i < p.length; ++i) { // state carried in from the end of the pattern
+        int8_t e = p.steps[i].notes[col].pitch;
+        if (e != SeqNote::kEmpty) on = e >= 0;
+    }
+    for (int i = 0; i < p.length; ++i) {
+        int8_t e = p.steps[i].notes[col].pitch;
+        if (e != SeqNote::kEmpty) on = e >= 0;
+        out[i] = on;
+    }
+}
+
 void drawSynth(App& a, const Pattern& p, int playStep, bool playing) {
     SDL_Renderer* r = a.renderer;
     const Cursor& c = a.synthCur;
+    bool held[kSynthCols][Pattern::kMaxSteps];
     for (int k = 0; k < kSynthCols; ++k) {
         drawText(r, kNoteX + k * kNoteColW, 74, 2, fmt("NOTE%d", k + 1), kDim);
-        drawText(r, kNoteX + k * kNoteColW + 76, 74, 2, "LEN", kDim);
+        drawText(r, kNoteX + k * kNoteColW + 76, 74, 2, "VEL", kDim);
+        soundingSteps(p, k, held[k]);
     }
     for (int row = 0; row < kPageSteps; ++row) {
         int step = a.page * kPageSteps + row;
@@ -165,14 +188,19 @@ void drawSynth(App& a, const Pattern& p, int playStep, bool playing) {
         drawText(r, 24, y + 9, 2, fmt("%02d", step), row % 4 == 0 ? kText : kDim);
         if (!inside) continue;
         for (int k = 0; k < kSynthCols; ++k) {
-            const SeqNote& n  = p.steps[step].notes[k];
+            const SeqNote& n = p.steps[step].notes[k];
+            // A bar left of the column shows how long each note rings.
+            if (held[k][step]) fillRect(r, kNoteX + k * kNoteColW - 10, y, 4, kSynthRowH - 3, kLine);
             for (int part = 0; part < 2; ++part) {
                 int  x   = kNoteX + k * kNoteColW + part * 76;
                 bool cur = c.row == row && c.col == k * 2 + part;
                 if (cur) fillRect(r, x - 6, y + 2, part ? 44 : 64, kSynthRowH - 7, kCursorBg);
-                std::string s = n.pitch < 0 ? (part ? "--" : "---")
-                                            : (part ? fmt("%02d", n.len) : noteName(n.pitch));
-                drawText(r, x, y + 9, 2, s, cur ? kAccent : n.pitch < 0 ? kLine : kText);
+                std::string s = n.pitch == SeqNote::kEmpty ? (part ? "-" : "---")
+                              : n.pitch == SeqNote::kOff   ? (part ? "-" : "OFF")
+                              : part                       ? std::to_string(n.vel)
+                                                           : noteName(n.pitch);
+                SDL_Color col = cur ? kAccent : n.isNote() ? kText : n.pitch == SeqNote::kOff ? kDim : kLine;
+                drawText(r, x, y + 9, 2, s, col);
             }
         }
     }
@@ -204,12 +232,16 @@ void drawDrums(App& a, const Pattern& p, int playStep, bool playing) {
             int  step   = a.page * kPageSteps + i;
             int  x      = kDrumCellX + i * kDrumCellW;
             bool inside = step < p.length;
-            bool hit    = inside && p.steps[step].find(kDrumBase + pad) >= 0;
+            int  slot   = inside ? p.steps[step].find(kDrumBase + pad) : -1;
             bool cur    = curRow && c.col == i;
             SDL_Color bg = !inside ? kBg : i % 4 == 0 ? kPanel2 : kPanel;
             if (inside && playing && playStep == step) bg = {44, 84, 60, 255};
             fillRect(r, x, y, kDrumCellW - 3, kDrumRowH - 6, bg);
-            if (hit) fillRect(r, x + 3, y + 8, kDrumCellW - 9, kDrumRowH - 22, a.seq.audible(t) ? kScopeC : kDim);
+            if (slot >= 0) { // height follows velocity
+                int full = kDrumRowH - 22;
+                int h    = std::max(4, full * p.steps[step].notes[slot].vel / kMaxVel);
+                fillRect(r, x + 3, y + 8 + full - h, kDrumCellW - 9, h, a.seq.audible(t) ? kScopeC : kDim);
+            }
             if (cur) {
                 strokeRect(r, x, y, kDrumCellW - 3, kDrumRowH - 6, kAccent);
                 strokeRect(r, x + 1, y + 1, kDrumCellW - 5, kDrumRowH - 8, kAccent);
@@ -265,6 +297,13 @@ void edit(App& a, int fine, int coarse) {
             int& rot = a.euclidRot[t][c.row];
             rot      = ((rot + coarse) % p.length + p.length) % p.length;
             euclidRow(p, c.row, rowHits(p, c.row) + fine, rot);
+        } else if (int step = a.page * kPageSteps + c.col; step < p.length) { // velocity of a hit
+            int slot = p.steps[step].find(kDrumBase + c.row);
+            if (slot < 0) return;
+            SeqNote& n = p.steps[step].notes[slot];
+            n.vel      = uint8_t(std::clamp(n.vel + fine + coarse, 1, kMaxVel));
+            a.lastVel[t] = n.vel;
+            preview(a, t, n.pitch, n.vel);
         }
         return;
     }
@@ -276,17 +315,18 @@ void edit(App& a, int fine, int coarse) {
     int step = a.page * kPageSteps + c.row;
     if (step >= p.length) return;
     SeqNote& n = p.steps[step].notes[c.col / 2];
-    if (n.pitch < 0) return;
+    if (!n.isNote()) return;
     if (c.col % 2 == 0) {
         int pitch = n.pitch;
         if (fine) pitch = scaleStep(pitch, fine, scaleInfo(a));
         pitch   = std::clamp(pitch + coarse * 12, 0, 127);
         n.pitch = int8_t(pitch);
         a.lastNote[t] = pitch;
-        preview(a, t, pitch);
     } else {
-        n.len = uint8_t(std::clamp(n.len + fine + coarse * 4, 1, Pattern::kMaxSteps));
+        n.vel        = uint8_t(std::clamp(n.vel + fine + coarse, 1, kMaxVel));
+        a.lastVel[t] = n.vel;
     }
+    preview(a, t, n.pitch, n.vel);
 }
 
 void enter(App& a) {
@@ -305,8 +345,8 @@ void enter(App& a) {
             if (st.find(kDrumBase + c.row) >= 0) {
                 st.remove(kDrumBase + c.row);
             } else {
-                st.add(kDrumBase + c.row, 1);
-                preview(a, t, kDrumBase + c.row);
+                st.add(kDrumBase + c.row, a.lastVel[t]);
+                preview(a, t, kDrumBase + c.row, a.lastVel[t]);
             }
         }
         return;
@@ -316,9 +356,10 @@ void enter(App& a) {
     int step = a.page * kPageSteps + c.row;
     if (step >= p.length) return;
     SeqNote& n = p.steps[step].notes[c.col / 2];
-    if (n.pitch < 0) n = {int8_t(a.lastNote[t]), 1, false}; // drop in the last note used
+    if (!n.isNote()) n = {int8_t(a.lastNote[t]), uint8_t(a.lastVel[t])}; // drop in the last note used
     a.lastNote[t] = n.pitch;
-    preview(a, t, n.pitch);
+    a.lastVel[t]  = n.vel;
+    preview(a, t, n.pitch, n.vel);
 }
 
 void clear(App& a) {
@@ -339,12 +380,20 @@ void clear(App& a) {
         return;
     }
     int step = a.page * kPageSteps + c.row;
-    if (step < p.length) p.steps[step].notes[c.col / 2] = SeqNote{};
+    if (step >= p.length) return;
+    SeqNote& n = p.steps[step].notes[c.col / 2];
+    if (c.col % 2 == 1) { // VEL: back to the default
+        if (n.isNote()) n.vel = kDefaultVel;
+        return;
+    }
+    // NOTE: a note goes, an empty cell becomes OFF, an OFF goes.
+    if (n.pitch == SeqNote::kEmpty) n.pitch = SeqNote::kOff;
+    else n = SeqNote{};
 }
 
 } // namespace
 
 const ScreenOps kPatternScreen = {
     "PATTERN", draw, move, edit, enter, clear,
-    "A:PUT/HIT  A+PAD:CHANGE  B+A:DELETE  X:GEN Y:MUTATE  L1/R1:TRACK  L2/R2:PAGE",
+    "A:PUT/HIT  A+PAD:CHANGE/VEL  B+A:DEL/OFF  X:GEN Y:MUTATE  L1/R1:TRACK  L2/R2:PG",
 };

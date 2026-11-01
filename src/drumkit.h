@@ -45,7 +45,7 @@ public:
     void       setKit(const Kit* kit);
     const Kit* kit() const { return kit_; }
 
-    void noteOn(int key, int note) override;
+    void noteOn(int key, int note, float gain) override;
     void noteOff(int) override {}
     void allOff() override;
     void render(float* out, int frames) override;
