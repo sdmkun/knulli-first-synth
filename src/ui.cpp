@@ -11,6 +11,7 @@ const ScreenOps& screenOps(Screen s) {
     switch (s) {
     case SCR_PATTERN: return kPatternScreen;
     case SCR_INSTR:   return kInstrScreen;
+    case SCR_MODS:    return kModsScreen;
     default:          return kSeqScreen;
     }
 }
@@ -20,6 +21,20 @@ void drawField(SDL_Renderer* r, int x, int y, const std::string& label, const st
     if (selected) fillRect(r, x - 8, y - 6, valueX - x + 8 + textWidth(value, 2) + 16, 26, kCursorBg);
     drawText(r, x, y, 2, label, selected ? kAccent : kDim);
     drawText(r, valueX, y, 2, value, selected ? kAccent : kText);
+}
+
+void drawParam(SDL_Renderer* r, const Params& p, int id, int x, int y, int valueX, int barX, int barW, bool selected) {
+    drawField(r, x, y, paramName(id), synthParamText(p, id), selected, valueX);
+    SDL_Color c    = selected ? kAccent : kDim;
+    float     norm = synthParamNorm(p, id);
+    if (!synthParamBipolar(id)) {
+        drawBar(r, barX, y + 3, barW, 10, norm, c);
+        return;
+    }
+    int mid = barX + barW / 2, end = barX + int(norm * barW);
+    fillRect(r, barX, y + 3, barW, 10, kLine);
+    fillRect(r, std::min(mid, end), y + 3, std::abs(end - mid), 10, c);
+    fillRect(r, mid - 1, y + 1, 2, 14, kText);
 }
 
 // Master output, triggered on a rising zero crossing so periodic waves stand still.
@@ -54,16 +69,21 @@ void drawChrome(App& a) {
     // Header: screen map, current track, DSP load.
     fillRect(r, 0, 0, kW, 52, kPanel);
     int x = 16;
-    for (int s = 0; s < SCR_COUNT; ++s) {
+    for (int s = 0; s < kMainScreens; ++s) {
         const char* name = screenOps(Screen(s)).name;
         int         w    = textWidth(name, 3);
         if (s == a.screen) fillRect(r, x - 6, 8, w + 12, 36, kAccent);
         drawText(r, x, 15, 3, name, s == a.screen ? kBg : kDim);
         x += w + 26;
     }
+    // MODS hangs above INSTR, so it is drawn small and raised.
+    bool mods = a.screen == SCR_MODS;
+    if (mods) fillRect(r, x - 6, 4, textWidth("MODS", 2) + 12, 22, kAccent);
+    drawText(r, x, 8, 2, "MODS", mods ? kBg : kDim);
+    drawText(r, x, 30, 2, "SEL+UP", kLine);
     std::string tn = fmt("T%d %s", a.track + 1, trackName(a, a.track).c_str());
-    if (tn.size() > 17) tn.resize(17);
-    drawText(r, 400, 15, 3, tn, kText);
+    if (tn.size() > 15) tn.resize(15);
+    drawText(r, 470, 15, 3, tn, kText);
 
     Uint32 now = SDL_GetTicks();
     if (SDL_TICKS_PASSED(now, a.peakResetAt)) {

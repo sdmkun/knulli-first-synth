@@ -74,8 +74,15 @@ void onSelectCombo(App& a, Btn b) {
     switch (b) {
     case BTN_LEFT:
     case BTN_RIGHT:
-        a.screen  = Screen(std::clamp(int(a.screen) + (b == BTN_LEFT ? -1 : 1), 0, SCR_COUNT - 1));
+        if (a.screen == SCR_MODS) break; // MODS only leads back down to INSTR
+        a.screen  = Screen(std::clamp(int(a.screen) + (b == BTN_LEFT ? -1 : 1), 0, kMainScreens - 1));
         a.genOpen = false;
+        break;
+    case BTN_UP:
+        if (a.screen == SCR_INSTR) a.screen = SCR_MODS, a.genOpen = false;
+        break;
+    case BTN_DOWN:
+        if (a.screen == SCR_MODS) a.screen = SCR_INSTR, a.genOpen = false;
         break;
     case BTN_B: {
         AudioLock lock(a.audio);

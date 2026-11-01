@@ -4,9 +4,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "app.h"
 #include "gfx.h"
+#include "wavetable.h"
 
 namespace {
 
@@ -16,7 +18,7 @@ constexpr int kTop     = 72;
 constexpr int kRightX  = 640;
 constexpr int kRightW  = kW - kRightX - 16;
 
-int rowCount(const App& a) { return ROW_FIRST + (a.isDrum[a.track] ? kDrumPads : int(P_COUNT)); }
+int rowCount(const App& a) { return ROW_FIRST + (a.isDrum[a.track] ? kDrumPads : kInstrParams); }
 
 // Keeps the cursor valid after the track or its type changed.
 Cursor& cursor(App& a) {
@@ -29,6 +31,39 @@ Cursor& cursor(App& a) {
 // ---------------------------------------------------------------- synth
 
 constexpr int kSynthRowH = 34;
+constexpr int kGroupGap  = 8; // extra space above FILTER and DLY TIME
+
+int synthRowY(int row) {
+    int y = kTop + row * kSynthRowH;
+    if (row >= ROW_FIRST + P_FILTER) y += kGroupGap;
+    if (row >= ROW_FIRST + P_DLY_TIME) y += kGroupGap;
+    return y;
+}
+
+// One cycle of the oscillator as it is set now (wavetables at their POS).
+void drawWaveShape(SDL_Renderer* r, const Params& p, int x, int y, int w, int h) {
+    SDL_SetRenderDrawColor(r, kLine.r, kLine.g, kLine.b, 255);
+    SDL_RenderDrawLine(r, x, y + h / 2, x + w - 1, y + h / 2);
+    std::vector<SDL_Point> pts(w);
+    uint32_t               seed = 1;
+    for (int i = 0; i < w; ++i) {
+        float ph = float(i) / w, s = 0.0f;
+        switch (Wave(p.wave)) {
+        case Wave::Sine:     s = std::sin(6.2831853f * ph); break;
+        case Wave::Triangle: s = 1.0f - 4.0f * std::fabs(ph - 0.5f); break;
+        case Wave::Saw:      s = 2.0f * ph - 1.0f; break;
+        case Wave::Square:   s = ph < pulseWidth(p.pos) ? 1.0f : -1.0f; break;
+        case Wave::Noise:
+            seed = seed * 1664525u + 1013904223u;
+            s    = float(seed >> 8) / 8388608.0f - 1.0f;
+            break;
+        default: s = wt::read(p.wave - int(Wave::WtMorph), 0, p.pos, ph); break;
+        }
+        pts[i] = {x + i, y + h / 2 - int(std::clamp(s, -1.0f, 1.0f) * (h / 2 - 4))};
+    }
+    SDL_SetRenderDrawColor(r, kScopeC.r, kScopeC.g, kScopeC.b, 255);
+    SDL_RenderDrawLines(r, pts.data(), w);
+}
 
 void drawSynth(App& a, const Cursor& c) {
     SDL_Renderer* r = a.renderer;
@@ -38,23 +73,21 @@ void drawSynth(App& a, const Cursor& c) {
         AudioLock lock(a.audio);
         p = a.synths[t].params;
     }
-    drawField(r, 40, kTop, "TYPE", "SYNTH", c.row == ROW_TYPE, 230);
-    drawField(r, 40, kTop + kSynthRowH, "PRESET", trackName(a, t), c.row == ROW_SOURCE, 230);
-    for (int id = 0; id < P_COUNT; ++id) {
-        int  row = ROW_FIRST + id;
-        int  y   = kTop + row * kSynthRowH;
-        bool sel = c.row == row;
-        drawField(r, 40, y, kParamNames[id], synthParamText(p, id), sel, 230);
-        drawBar(r, 430, y + 3, 150, 10, synthParamNorm(p, id), sel ? kAccent : kDim);
-    }
+    drawField(r, 40, synthRowY(ROW_TYPE), "TYPE", "SYNTH", c.row == ROW_TYPE, 230);
+    drawField(r, 40, synthRowY(ROW_SOURCE), "PRESET", trackName(a, t), c.row == ROW_SOURCE, 230);
+    for (int id = 0; id < kInstrParams; ++id)
+        drawParam(r, p, id, 40, synthRowY(ROW_FIRST + id), 230, 430, 150, c.row == ROW_FIRST + id);
 
-    fillRect(r, kRightX, kTop - 6, kRightW, 300, kPanel);
-    drawText(r, kRightX + 12, kTop + 4, 2, "OUTPUT", kDim);
-    drawScope(a, kRightX + 8, kTop + 30, kRightW - 16, 256);
-    int y = kTop + 320;
+    fillRect(r, kRightX, kTop - 6, kRightW, 250, kPanel);
+    drawText(r, kRightX + 12, kTop + 4, 2, waveName(p.wave), kDim);
+    drawWaveShape(r, p, kRightX + 8, kTop + 30, kRightW - 16, 200);
+    fillRect(r, kRightX, kTop + 256, kRightW, 170, kPanel);
+    drawText(r, kRightX + 12, kTop + 266, 2, "OUTPUT", kDim);
+    drawScope(a, kRightX + 8, kTop + 290, kRightW - 16, 130);
+    int y = kTop + 448;
     drawText(r, kRightX + 12, y, 2, fmt("A: PLAY %s", noteName(a.lastNote[t]).c_str()), kDim);
-    drawText(r, kRightX + 12, y + 24, 2, "A+UP/DN: COARSE", kDim);
-    drawText(r, kRightX + 12, y + 48, 2, "B+A: BACK TO PRESET", kDim);
+    drawText(r, kRightX + 12, y + 24, 2, "B+A: BACK TO PRESET", kDim);
+    drawText(r, kRightX + 12, y + 48, 2, "SEL+UP: ENVELOPES, LFOS", kAccent);
 }
 
 void editSynth(App& a, const Cursor& c, int fine, int coarse) {
@@ -222,5 +255,5 @@ void clear(App& a) {
 
 const ScreenOps kInstrScreen = {
     "INSTR", draw, move, edit, enter, clear, nullptr,
-    "A:PLAY  A+PAD:EDIT  B+A:RESET  L1/R1:TRACK  SEL+<>:SCREEN  START:PLAY",
+    "A:PLAY  A+PAD:EDIT  B+A:RESET  L1/R1:TRACK  SEL+UP:MODS  SEL+<>:SCREEN",
 };

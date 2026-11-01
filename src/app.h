@@ -25,7 +25,9 @@ enum Btn {
 extern const char* kBtnNames[BTN_COUNT];
 
 // Screens sit side by side like the M8's; SELECT + left / right moves between them.
-enum Screen { SCR_SEQ, SCR_PATTERN, SCR_INSTR, SCR_COUNT };
+// MODS (envelopes and LFOs) sits above INSTR: SELECT + up / down.
+enum Screen { SCR_SEQ, SCR_PATTERN, SCR_INSTR, SCR_MODS, SCR_COUNT };
+constexpr int kMainScreens = SCR_MODS; // the row SELECT + left / right walks
 
 constexpr int kTracks    = Sequencer::kTracks;
 constexpr int kPageSteps = 16; // steps shown at once; longer patterns are paged with L2 / R2
@@ -40,14 +42,20 @@ extern const Scale  kScales[];
 extern const int    kScaleCount;
 extern const char*  kNoteNames[12];
 
+// Synth parameters as the UI sees them. The first kInstrParams are on INSTR,
+// the rest (envelopes and LFOs) on MODS.
 enum ParamId {
-    P_WAVE, P_CUTOFF, P_RESO, P_ATTACK, P_RELEASE, P_DETUNE, P_VOLUME,
-    P_FENV_AMT, P_FENV_DECAY,
-    P_LFO_RATE, P_LFO_DEPTH, P_LFO_DEST,
+    P_WAVE, P_POS, P_PITCH, P_DETUNE, P_SUB, P_NOISE,
+    P_FILTER, P_CUTOFF, P_RESO, P_DRIVE, P_VOLUME,
     P_DLY_TIME, P_DLY_FDBK, P_DLY_MIX,
+    P_AMP_A, P_AMP_D, P_AMP_S, P_AMP_R,
+    P_ENV_A, P_ENV_D, P_ENV_S, P_ENV_R, P_ENV_DEST, P_ENV_AMT,
+    P_L1_SHAPE, P_L1_RATE, P_L1_DEST, P_L1_AMT, P_L1_TRIG,
+    P_L2_SHAPE, P_L2_RATE, P_L2_DEST, P_L2_AMT, P_L2_TRIG,
     P_COUNT
 };
-extern const char* kParamNames[P_COUNT];
+constexpr int kInstrParams = P_AMP_A;
+const char* paramName(int id);
 
 struct Cursor {
     int row = 0;
@@ -104,6 +112,7 @@ struct App {
     Cursor synthCur;      // cols: 4 per note column (NOTE, VEL, FX command, FX value)
     Cursor drumCur{0, 0}; // col -1 = row label (Euclid), 0..15 = steps
     Cursor instCur;
+    Cursor modsCur; // col = block (AMP ENV, ENV 2, LFO 1, LFO 2), row within it
 
     bool   held[BTN_COUNT]     = {};
     Uint32 repeatAt[BTN_COUNT] = {};
@@ -147,7 +156,8 @@ void        regenerate(App& a, int t);        // locked; rebuilds track t from i
 void        mutate(App& a, int t);            // locked
 void        newSeed(App& a);                  // current track: new seed, regenerate (with undo and a message)
 void        mutateTrack(App& a);              // current track: mutate (with undo and a message)
-float       synthParamNorm(const Params& p, int id);
+float       synthParamNorm(const Params& p, int id); // bar position 0..1; bipolar amounts sit at 0.5 when 0
+bool        synthParamBipolar(int id);
 std::string synthParamText(const Params& p, int id);
 void        adjustSynthParam(Params& p, int id, int fine, int coarse);
 void        resetSynthParam(Params& p, const Params& from, int id); // copies one parameter
@@ -163,7 +173,7 @@ struct ScreenOps {
     void (*option)(App&, int fine, int coarse); // B held + D-pad; may be null
     const char* hints;
 };
-extern const ScreenOps kSeqScreen, kPatternScreen, kInstrScreen;
+extern const ScreenOps kSeqScreen, kPatternScreen, kInstrScreen, kModsScreen;
 const ScreenOps& screenOps(Screen s);
 
 // GENERATE popup (ui_gen.cpp), drawn over the current screen while a.genOpen.
@@ -178,3 +188,5 @@ void drawChrome(App& a);                                   // header, transport 
 void drawScope(App& a, int x, int y, int w, int h);
 void drawField(SDL_Renderer* r, int x, int y, const std::string& label, const std::string& value,
                bool selected, int valueX); // "LABEL   VALUE" row with cursor highlight
+// A synth parameter row: label, value text and a bar (bipolar amounts grow from the middle).
+void drawParam(SDL_Renderer* r, const Params& p, int id, int x, int y, int valueX, int barX, int barW, bool selected);
