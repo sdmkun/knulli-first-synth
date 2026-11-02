@@ -167,5 +167,5 @@ void clear(App& a) {
 
 const ScreenOps kSeqScreen = {
     "SEQ", draw, move, edit, enter, clear, nullptr,
-    "A:OPEN STEP  A+PAD:EDIT  B+A:CLEAR  X:GEN  Y:MUTATE  L3/R3:MUTE/SOLO  SEL+DN:MIXER",
+    "A:OPEN STEP  A+PAD:EDIT  B+A:CLEAR  X:GEN  L3/R3:MUTE/SOLO  Y+DN:MIXER  Y+<>:SCREEN",
 };

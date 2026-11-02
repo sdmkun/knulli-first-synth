@@ -39,10 +39,21 @@ constexpr int kMaxVel     = 8;
 constexpr int kDefaultVel = 6; // unity gain
 float velocityGain(int vel);
 
+// A note command on a whole row (step): it works on every note the row starts
+// and, on a row without notes, on the notes still sounding (KIL cuts them, ARP
+// arpeggiates them, RET retriggers them). Synth tracks use these; drum hits
+// carry their own command in SeqNote instead.
+struct StepFx {
+    Fx      fx  = Fx::None;
+    uint8_t val = 0;
+};
+
 struct SeqStep {
     static constexpr int kMaxNotes = 8; // columns; a drum step can hold the whole kit
+    static constexpr int kFx       = 2; // row commands, shown at the right edge
     SeqNote notes[kMaxNotes];
-    bool    empty() const;               // no notes and no OFFs
+    StepFx  fx[kFx];
+    bool    empty() const;               // no notes and no OFFs (row commands aside)
     int     count() const;               // notes only
     bool    hasOff() const;
     int     find(int pitch) const;       // column holding `pitch`, or -1
@@ -132,6 +143,7 @@ private:
     void   fireTick(Instrument* const* inst);
     void   startStep(int track);
     void   trigger(Instrument& inst, int track, Column& col, const SeqNote& n);
+    void   applyFx(Column& col, Fx fx, int val); // RET / ARP / KIL on a sounding column
     int    newKey(int track);
     void   releaseTrack(Instrument& inst, int track);
     float  random01();

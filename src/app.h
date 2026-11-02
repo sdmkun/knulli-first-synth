@@ -160,6 +160,7 @@ struct App {
     int    root   = 0; // C
     int    lastNote[kTracks] = {60, 36, 60, 60}; // what A drops into an empty synth cell
     int    lastVel[kTracks]  = {kDefaultVel, kDefaultVel, kDefaultVel, kDefaultVel}; // and how hard
+    StepFx lastFx[kTracks]   = {{Fx::Ret, 3}, {Fx::Ret, 3}, {Fx::Ret, 3}, {Fx::Ret, 3}}; // what A puts in an empty FX
 
     Cursor seqCur{0, 0};  // row -1 = BPM / KEY / SCALE fields
     Cursor synthCur;      // cols: 4 per note column (NOTE, VEL, FX command, FX value)
@@ -241,7 +242,11 @@ const ScreenOps& screenOps(Screen s);
 void openPopup(App& a, Popup p);
 void drawPopup(App& a);
 bool popupPress(App& a, Btn b); // true when the popup used the button
-void openFxPopup(App& a, SeqNote* (*target)(App&)); // note command list for the note `target` finds
+struct FxRef { // a command and its value, wherever they live (a drum hit or a row)
+    Fx*      fx  = nullptr;
+    uint8_t* val = nullptr;
+};
+void openFxPopup(App& a, FxRef (*target)(App&)); // command list for what `target` finds (locked call)
 void openGroovePopup(App& a);
 void openSampleBrowser(App& a, int t, int pad);
 

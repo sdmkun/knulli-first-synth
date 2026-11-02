@@ -192,5 +192,5 @@ void clear(App& a) {
 
 const ScreenOps kMixerScreen = {
     "MIXER", draw, move, edit, enter, clear, nullptr,
-    "A+PAD:EDIT  B+A:RESET  L3/R3:MUTE/SOLO  Y:MUTATE  SEL+UP:SEQ",
+    "A+PAD:EDIT  B+A:RESET  L3/R3:MUTE/SOLO  Y+UP:SEQ",
 };

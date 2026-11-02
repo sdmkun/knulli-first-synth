@@ -119,5 +119,5 @@ void clear(App& a) {
 
 const ScreenOps kModsScreen = {
     "MODS", draw, move, edit, enter, clear, nullptr,
-    "A:PLAY  A+PAD:EDIT  B+A:RESET  L1/R1:TRACK  SEL+DOWN:INSTR",
+    "A:PLAY  A+PAD:EDIT  B+A:RESET  L1/R1:TRACK  Y+DOWN:INSTR",
 };

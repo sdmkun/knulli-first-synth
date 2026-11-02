@@ -13,25 +13,24 @@ namespace {
 // ---------------------------------------------------------------- shared
 
 // Steps a note command and resets its value, or changes the value within the command's range.
-void editFx(SeqNote& n, int cmdDir, int valFine, int valCoarse) {
+void editFx(Fx& fx, uint8_t& val, int cmdDir, int valFine, int valCoarse) {
     if (cmdDir) {
-        int k   = int(Fx::Count);
-        n.fx    = Fx((int(n.fx) + cmdDir + k) % k);
-        n.fxVal = uint8_t(fxDefault(n.fx));
+        int k = int(Fx::Count);
+        fx    = Fx((int(fx) + cmdDir + k) % k);
+        val   = uint8_t(fxDefault(fx));
         return;
     }
-    if (n.fx == Fx::None) return;
-    int v = n.fxVal;
-    if (n.fx == Fx::Arp) v = (v & 0xF0) | ((v + valFine) & 0x0F), v = (v + valCoarse * 16) & 0xFF; // y digit, x digit
-    else if (n.fx == Fx::Cha) v += valFine * 5 + valCoarse * 25;
+    if (fx == Fx::None) return;
+    int v = val;
+    if (fx == Fx::Arp) v = (v & 0xF0) | ((v + valFine) & 0x0F), v = (v + valCoarse * 16) & 0xFF; // y digit, x digit
+    else if (fx == Fx::Cha) v += valFine * 5 + valCoarse * 25;
     else v += valFine + valCoarse * 4;
-    n.fxVal = uint8_t(fxClamp(n.fx, v));
+    val = uint8_t(fxClamp(fx, v));
 }
 
 // What a command does with its value, for the help line.
-std::string fxHelp(const SeqNote& n) {
-    int v = n.fxVal;
-    switch (n.fx) {
+std::string fxHelp(Fx fx, int v) {
+    switch (fx) {
     case Fx::Ret: return fmt("RET: REPEAT EVERY %d TICKS", v);
     case Fx::Arp: return fmt("ARP: CYCLE +0 +%d +%d SEMITONES", v >> 4, v & 15);
     case Fx::Kil: return fmt("KIL: CUT AFTER %d TICKS", v);
@@ -43,14 +42,23 @@ std::string fxHelp(const SeqNote& n) {
 
 // ---------------------------------------------------------------- synth tracker
 
+// Four note columns (NOTE, VEL) and, at the right edge, the row's two commands
+// (command, value), which act on every note of the row. Cursor columns: 0..7 are
+// the note columns' NOTE / VEL, 8..11 the commands' CMD / VALUE.
 constexpr int kSynthRowY = 102;
 constexpr int kSynthRowH = 34;
 constexpr int kNoteX     = 76;
-constexpr int kNoteColW  = 236;
-constexpr int kSub       = 4;                   // cursor sub-columns per note column
-constexpr int kSubX[kSub] = {0, 56, 92, 140};   // NOTE, VEL, FX command, FX value
-constexpr int kSubW[kSub] = {52, 24, 44, 32};   // cursor highlight widths (text + margin)
-enum { SUB_NOTE, SUB_VEL, SUB_CMD, SUB_VAL };
+constexpr int kNoteColW  = 150;
+constexpr int kSub       = 2;                 // cursor sub-columns per note column
+constexpr int kSubX[kSub] = {0, 56};          // NOTE, VEL
+constexpr int kSubW[kSub] = {52, 24};         // cursor highlight widths (text + margin)
+enum { SUB_NOTE, SUB_VEL };
+constexpr int kFxX       = 690;
+constexpr int kFxColW    = 160;
+constexpr int kFxSubX[2] = {0, 48};           // command, value
+constexpr int kFxSubW[2] = {36, 24};
+constexpr int kNoteCurs  = kSynthCols * kSub; // first cursor column of the commands
+constexpr int kSynthCurs = kNoteCurs + SeqStep::kFx * 2;
 
 // Which steps of column `col` have a note sounding: from a note until the next
 // note or OFF in the column, wrapping around the end of the pattern.
@@ -67,17 +75,21 @@ void soundingSteps(const Pattern& p, int col, bool* out) {
     }
 }
 
-std::string synthCellText(const SeqNote& n, int sub) {
+std::string noteCellText(const SeqNote& n, int sub) {
     if (!n.isNote()) {
         if (sub == SUB_NOTE) return n.pitch == SeqNote::kOff ? "OFF" : "---";
-        return sub == SUB_VEL ? "-" : sub == SUB_CMD ? "---" : "--";
+        return "-";
     }
-    switch (sub) {
-    case SUB_NOTE: return noteName(n.pitch);
-    case SUB_VEL:  return std::to_string(n.vel);
-    case SUB_CMD:  return fxName(n.fx);
-    default:       return fxValueText(n.fx, n.fxVal);
-    }
+    return sub == SUB_NOTE ? noteName(n.pitch) : std::to_string(n.vel);
+}
+
+// The row command under the cursor (when it is on one), or null. Locked.
+StepFx* cursorFx(App& a) {
+    const Cursor& c    = a.synthCur;
+    Pattern&      p    = a.seq.patterns[a.track];
+    int           step = a.page * kPageSteps + c.row;
+    if (c.col < kNoteCurs || step >= p.length) return nullptr;
+    return &p.steps[step].fx[(c.col - kNoteCurs) / 2];
 }
 
 void drawSynth(App& a, const Pattern& p, int playStep, bool playing) {
@@ -88,9 +100,9 @@ void drawSynth(App& a, const Pattern& p, int playStep, bool playing) {
         int x = kNoteX + k * kNoteColW;
         drawText(r, x, 74, 2, fmt("N%d", k + 1), kDim);
         drawText(r, x + kSubX[SUB_VEL], 74, 2, "V", kDim);
-        drawText(r, x + kSubX[SUB_CMD], 74, 2, "FX", kDim);
         soundingSteps(p, k, held[k]);
     }
+    for (int f = 0; f < SeqStep::kFx; ++f) drawText(r, kFxX + f * kFxColW, 74, 2, fmt("FX%d", f + 1), kDim);
     for (int row = 0; row < kPageSteps; ++row) {
         int  step   = a.page * kPageSteps + row;
         int  y      = kSynthRowY + row * kSynthRowH;
@@ -108,28 +120,33 @@ void drawSynth(App& a, const Pattern& p, int playStep, bool playing) {
                 int  x   = kNoteX + k * kNoteColW + kSubX[sub];
                 bool cur = c.row == row && c.col == k * kSub + sub;
                 if (cur) fillRect(r, x - 6, y + 2, kSubW[sub] + 12, kSynthRowH - 7, kCursorBg);
-                bool      lit = n.isNote() && (sub < SUB_CMD || n.fx != Fx::None);
-                SDL_Color col = cur ? kAccent : lit ? (sub >= SUB_CMD ? kScopeC : kText)
-                                    : n.pitch == SeqNote::kOff && sub == SUB_NOTE ? kDim : kLine;
-                drawText(r, x, y + 9, 2, synthCellText(n, sub), col);
+                SDL_Color col = cur ? kAccent : n.isNote() ? kText
+                              : n.pitch == SeqNote::kOff && sub == SUB_NOTE ? kDim : kLine;
+                drawText(r, x, y + 9, 2, noteCellText(n, sub), col);
+            }
+        }
+        fillRect(r, kFxX - 16, y, 2, kSynthRowH - 3, kLine); // the commands belong to the whole row
+        for (int f = 0; f < SeqStep::kFx; ++f) {
+            const StepFx& fx = p.steps[step].fx[f];
+            for (int sub = 0; sub < 2; ++sub) {
+                int  x   = kFxX + f * kFxColW + kFxSubX[sub];
+                bool cur = c.row == row && c.col == kNoteCurs + f * 2 + sub;
+                if (cur) fillRect(r, x - 6, y + 2, kFxSubW[sub] + 12, kSynthRowH - 7, kCursorBg);
+                std::string text = sub == 0 ? fxName(fx.fx) : fxValueText(fx.fx, fx.val);
+                drawText(r, x, y + 9, 2, text, cur ? kAccent : fx.fx != Fx::None ? kScopeC : kLine);
             }
         }
     }
-    if (c.col % kSub >= SUB_CMD && c.row < kPageSteps) {
+    if (c.col >= kNoteCurs && c.row < kPageSteps) {
         int step = a.page * kPageSteps + c.row;
-        if (step < p.length && p.steps[step].notes[c.col / kSub].isNote())
-            a.message = fxHelp(p.steps[step].notes[c.col / kSub]);
+        if (step < p.length) {
+            const StepFx& fx = p.steps[step].fx[(c.col - kNoteCurs) / 2];
+            a.message = fx.fx == Fx::None ? "FX: A PUTS THE LAST ONE (" + std::string(fxName(a.lastFx[a.track].fx)) +
+                                                " " + fxValueText(a.lastFx[a.track].fx, a.lastFx[a.track].val) +
+                                                ")  A+UP/DN: LIST"
+                                          : fxHelp(fx.fx, fx.val) + "  (WHOLE ROW)";
+        }
     }
-}
-
-// The note under the synth cursor (any of its four sub-columns), or null. Locked.
-SeqNote* synthNote(App& a) {
-    const Cursor& c    = a.synthCur;
-    Pattern&      p    = a.seq.patterns[a.track];
-    int           step = a.page * kPageSteps + c.row;
-    if (step >= p.length) return nullptr;
-    SeqNote& n = p.steps[step].notes[c.col / kSub];
-    return n.isNote() ? &n : nullptr;
 }
 
 void editSynth(App& a, Pattern& p, int fine, int coarse) {
@@ -137,23 +154,23 @@ void editSynth(App& a, Pattern& p, int fine, int coarse) {
     const Cursor& c    = a.synthCur;
     int           step = a.page * kPageSteps + c.row;
     if (step >= p.length) return;
+    if (StepFx* fx = cursorFx(a)) {
+        if ((c.col - kNoteCurs) % 2 == 0) editFx(fx->fx, fx->val, fine, 0, 0); // up / down opens the list (see edit())
+        else editFx(fx->fx, fx->val, 0, fine, coarse);
+        if (fx->fx != Fx::None) a.lastFx[t] = *fx;
+        return;
+    }
     SeqNote& n = p.steps[step].notes[c.col / kSub];
     if (!n.isNote()) return;
-    switch (c.col % kSub) {
-    case SUB_NOTE: {
+    if (c.col % kSub == SUB_NOTE) {
         int pitch = n.pitch;
         if (fine) pitch = scaleStep(pitch, fine, scaleInfo(a));
         pitch   = std::clamp(pitch + coarse * 12, 0, 127);
         n.pitch = int8_t(pitch);
         a.lastNote[t] = pitch;
-        break;
-    }
-    case SUB_VEL:
+    } else {
         n.vel        = uint8_t(std::clamp(n.vel + fine + coarse, 1, kMaxVel));
         a.lastVel[t] = n.vel;
-        break;
-    case SUB_CMD: editFx(n, fine, 0, 0); return; // up / down opens the list (see edit())
-    case SUB_VAL: editFx(n, 0, fine, coarse); return;
     }
     preview(a, t, n.pitch, n.vel);
 }
@@ -202,7 +219,7 @@ void drawDrumInfo(App& a, Pattern& p) {
         drawText(r, x + 16, y + 36, 2, "FX", kDim);
         drawText(r, x + 110, y + 36, 2, std::string(fxName(n->fx)) + " " + fxValueText(n->fx, n->fxVal),
                  n->fx == Fx::None ? kLine : kScopeC);
-        std::string help = fxHelp(*n);
+        std::string help = fxHelp(n->fx, n->fxVal);
         size_t      cut  = help.find(':');
         drawText(r, x + 16, y + 64, 2, help.substr(cut + 2), kDim);
     }
@@ -277,24 +294,31 @@ void move(App& a, int dx, int dy) {
         c.row     = std::clamp(c.row + dy, 0, kDrumPads - 1);
     } else {
         Cursor& c = a.synthCur;
-        c.col     = std::clamp(c.col + dx, 0, kSynthCols * kSub - 1);
+        c.col     = std::clamp(c.col + dx, 0, kSynthCurs - 1);
         c.row     = std::clamp(c.row + dy, 0, kPageSteps - 1);
     }
 }
 
-// The drum hit under the cursor, for the command list. Locked.
-SeqNote* drumNote(App& a) { return drumHit(a, a.seq.patterns[a.track]); }
+// What the command list edits: the drum hit's own command, or the row command under the synth cursor. Locked.
+FxRef drumFxRef(App& a) {
+    SeqNote* n = drumHit(a, a.seq.patterns[a.track]);
+    return n ? FxRef{&n->fx, &n->fxVal} : FxRef{};
+}
+FxRef synthFxRef(App& a) {
+    StepFx* f = cursorFx(a);
+    return f ? FxRef{&f->fx, &f->val} : FxRef{};
+}
 
 void edit(App& a, int fine, int coarse) {
     const int t = a.track;
     // A + up / down on a note command opens the list of commands (M8 style).
     if (coarse && !fine) {
-        if (!a.isDrum[t] && a.synthCur.col % kSub == SUB_CMD) {
-            openFxPopup(a, synthNote);
+        if (!a.isDrum[t] && a.synthCur.col >= kNoteCurs && (a.synthCur.col - kNoteCurs) % 2 == 0) {
+            openFxPopup(a, synthFxRef);
             return;
         }
         if (a.isDrum[t] && a.drumCur.col >= 0) { // on a drum hit; left / right stays velocity
-            openFxPopup(a, drumNote);
+            openFxPopup(a, drumFxRef);
             return;
         }
     }
@@ -321,16 +345,11 @@ void option(App& a, int fine, int coarse) {
     const int t = a.track;
     if (!a.isDrum[t]) return;
     if (fine) {
-        bool hit;
-        {
-            AudioLock lock(a.audio);
-            hit = drumNote(a) != nullptr;
-        }
-        if (hit) openFxPopup(a, drumNote);
+        openFxPopup(a, drumFxRef);
         return;
     }
     AudioLock lock(a.audio);
-    if (SeqNote* n = drumHit(a, a.seq.patterns[t])) editFx(*n, 0, 0, coarse);
+    if (SeqNote* n = drumHit(a, a.seq.patterns[t])) editFx(n->fx, n->fxVal, 0, 0, coarse);
 }
 
 void enter(App& a) {
@@ -353,6 +372,13 @@ void enter(App& a) {
     const Cursor& c    = a.synthCur;
     int           step = a.page * kPageSteps + c.row;
     if (step >= p.length) return;
+    if (StepFx* fx = cursorFx(a)) { // an empty command takes the last one used
+        if (fx->fx == Fx::None) {
+            pushUndo(a, t);
+            *fx = a.lastFx[t];
+        }
+        return;
+    }
     SeqNote& n = p.steps[step].notes[c.col / kSub];
     if (!n.isNote()) {
         pushUndo(a, t);
@@ -377,15 +403,13 @@ void clear(App& a) {
     const Cursor& c    = a.synthCur;
     int           step = a.page * kPageSteps + c.row;
     if (step >= p.length) return;
-    SeqNote& n = p.steps[step].notes[c.col / kSub];
-    switch (c.col % kSub) {
-    case SUB_VEL: // back to the default
-        if (n.isNote()) n.vel = kDefaultVel;
+    if (StepFx* fx = cursorFx(a)) {
+        *fx = StepFx{};
         return;
-    case SUB_CMD:
-    case SUB_VAL:
-        n.fx    = Fx::None;
-        n.fxVal = 0;
+    }
+    SeqNote& n = p.steps[step].notes[c.col / kSub];
+    if (c.col % kSub == SUB_VEL) { // back to the default
+        if (n.isNote()) n.vel = kDefaultVel;
         return;
     }
     // NOTE: a note goes, an empty cell becomes OFF, an OFF goes.
@@ -397,5 +421,5 @@ void clear(App& a) {
 
 const ScreenOps kPatternScreen = {
     "PATTERN", draw, move, edit, enter, clear, option,
-    "A:PUT  A+PAD:CHANGE  B+A:DEL/OFF  X:GENERATE  Y:MUTATE  L1/R1:TRACK  L2/R2:PAGE",
+    "A:PUT  A+PAD:CHANGE  A+UP/DN ON FX:LIST  B+A:DEL/OFF  X:GEN  Y+PAD:SCREEN",
 };

@@ -201,13 +201,13 @@ void drawPopup(App& a) {
     drawText(r, kX + 16, kY + h - 28, 2, p.footer.empty() ? "A:SELECT  B:CLOSE  L2/R2:PAGE" : p.footer, kDim);
 }
 
-void openFxPopup(App& a, SeqNote* (*target)(App&)) {
+void openFxPopup(App& a, FxRef (*target)(App&)) {
     Fx current = Fx::None;
     {
         AudioLock lock(a.audio);
-        SeqNote*  n = target(a);
-        if (!n) return;
-        current = n->fx;
+        FxRef     ref = target(a);
+        if (!ref.fx) return;
+        current = *ref.fx;
     }
     Popup p;
     p.title = "NOTE COMMAND";
@@ -218,10 +218,11 @@ void openFxPopup(App& a, SeqNote* (*target)(App&)) {
     p.sel  = int(current);
     p.pick = [target](App& app, int i) {
         AudioLock lock(app.audio);
-        if (SeqNote* n = target(app); n && n->fx != Fx(i)) {
-            n->fx    = Fx(i);
-            n->fxVal = uint8_t(fxDefault(n->fx));
+        if (FxRef ref = target(app); ref.fx && *ref.fx != Fx(i)) {
+            *ref.fx  = Fx(i);
+            *ref.val = uint8_t(fxDefault(Fx(i)));
         }
+        if (Fx(i) != Fx::None) app.lastFx[app.track] = {Fx(i), uint8_t(fxDefault(Fx(i)))};
         app.popup.open = false;
     };
     p.footer = "A:SET  B:CANCEL  (VALUE SHOWN IS THE DEFAULT)";

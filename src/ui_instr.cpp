@@ -88,7 +88,7 @@ void drawSynth(App& a, const Cursor& c) {
     int y = kTop + 448;
     drawText(r, kRightX + 12, y, 2, fmt("A: PLAY %s", noteName(a.lastNote[t]).c_str()), kDim);
     drawText(r, kRightX + 12, y + 24, 2, "B+A: BACK TO PRESET", kDim);
-    drawText(r, kRightX + 12, y + 48, 2, "SEL+UP: ENVELOPES, LFOS", kAccent);
+    drawText(r, kRightX + 12, y + 48, 2, "Y+UP: ENVELOPES, LFOS", kAccent);
 }
 
 void editSynth(App& a, const Cursor& c, int fine, int coarse) {
@@ -264,5 +264,5 @@ void clear(App& a) {
 
 const ScreenOps kInstrScreen = {
     "INSTR", draw, move, edit, enter, clear, nullptr,
-    "A:PLAY  A+PAD:EDIT  B+A:RESET  L1/R1:TRACK  SEL+UP:MODS  SEL+<>:SCREEN",
+    "A:PLAY  A+PAD:EDIT  B+A:RESET  L1/R1:TRACK  Y+UP:MODS  Y+<>:SCREEN",
 };

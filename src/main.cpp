@@ -70,8 +70,9 @@ void togglePlay(App& a) {
     else a.seq.start();
 }
 
-void onSelectCombo(App& a, Btn b) {
-    a.popup.open = false; // a SELECT combo always leaves the list
+// Y + D-pad (and SELECT + D-pad) walk the screen map, like SHIFT on the M8.
+void navigate(App& a, Btn b) {
+    a.popup.open = false;
     switch (b) {
     case BTN_LEFT:
     case BTN_RIGHT:
@@ -87,6 +88,17 @@ void onSelectCombo(App& a, Btn b) {
         if (a.screen == SCR_MODS) a.screen = SCR_INSTR, a.genOpen = false;
         else if (a.screen == SCR_SEQ) a.screen = SCR_MIXER, a.genOpen = false;
         break;
+    default: break;
+    }
+}
+
+void onSelectCombo(App& a, Btn b) {
+    a.popup.open = false; // a SELECT combo always leaves the list
+    switch (b) {
+    case BTN_UP:
+    case BTN_DOWN:
+    case BTN_LEFT:
+    case BTN_RIGHT: navigate(a, b); break;
     case BTN_B: {
         AudioLock lock(a.audio);
         if (!a.hasUndo[a.track]) {
@@ -157,6 +169,10 @@ void onPress(App& a, Btn b) {
         onSelectCombo(a, b);
         return;
     }
+    if (a.held[BTN_Y] && (b == BTN_UP || b == BTN_DOWN || b == BTN_LEFT || b == BTN_RIGHT) && !a.genOpen) {
+        navigate(a, b);
+        return;
+    }
     if (a.popup.open && b != BTN_UP && b != BTN_DOWN && b != BTN_LEFT && b != BTN_RIGHT && popupPress(a, b)) {
         if (b == BTN_A) a.aScreen = SCR_COUNT; // a held A that picked from the list edits nothing
         return;
@@ -176,7 +192,7 @@ void onPress(App& a, Btn b) {
         a.genOpen   = true;
         a.genEdited = false;
         break;
-    case BTN_Y:     mutateTrack(a); break;
+    case BTN_Y:     break; // held with the D-pad it moves between screens
     case BTN_START: togglePlay(a); break;
     case BTN_L1:    selectTrack(a, a.track - 1); break;
     case BTN_R1:    selectTrack(a, a.track + 1); break;
@@ -205,7 +221,7 @@ void setButton(App& a, Btn b, bool down) {
 }
 
 void handleRepeat(App& a) {
-    if (a.held[BTN_SELECT]) return;
+    if (a.held[BTN_SELECT] || (a.held[BTN_Y] && !a.genOpen)) return;
     Uint32 now = SDL_GetTicks();
     for (Btn b : {BTN_UP, BTN_DOWN, BTN_LEFT, BTN_RIGHT}) {
         if (a.held[b] && SDL_TICKS_PASSED(now, a.repeatAt[b])) {
@@ -477,7 +493,7 @@ int main(int argc, char* argv[]) {
         a.seq.loopUser = &a;
         a.seq.onLoop   = [](void* user, int t) { evolveOnLoop(*static_cast<App*>(user), t); };
     }
-    a.message = "START: PLAY   X: GENERATE   SEL+LEFT/RIGHT: SCREENS";
+    a.message = "START: PLAY   X: GENERATE   Y+PAD: SCREENS";
     if (a.audio) SDL_PauseAudioDevice(a.audio, 0);
 
     while (!a.quit) {

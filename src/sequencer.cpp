@@ -173,19 +173,48 @@ int Sequencer::newKey(int track) {
     return key;
 }
 
-// Queues each column's entry of the new step at its tick (DLY moves it later; CHA may drop it).
+// Queues each column's entry of the new step at its tick (DLY moves it later; CHA
+// may drop it). The row's own commands: DLY and CHA act on all its notes at once
+// (one chance roll, so a chord stays whole); RET, ARP and KIL go to each note as
+// it starts, or right away to the notes still sounding in columns the row leaves empty.
 void Sequencer::startStep(int track) {
-    const SeqStep& st = patterns[track].steps[step_[track]];
+    const SeqStep& st     = patterns[track].steps[step_[track]];
+    int            rowDly = 0;
+    bool           rowOn  = true;
+    for (const StepFx& f : st.fx) {
+        if (f.fx == Fx::Dly) rowDly = std::min<int>(f.val, kTicksPerStep - 1);
+        if (f.fx == Fx::Cha && random01() * 100.0f >= f.val) rowOn = false;
+    }
     for (int c = 0; c < SeqStep::kMaxNotes; ++c) {
         Column&        col = cols_[track][c];
         const SeqNote& n   = st.notes[c];
         col.retEvery       = 0; // rolls last one step
         col.pending        = false;
-        if (n.pitch == SeqNote::kEmpty) continue;
-        if (n.isNote() && n.fx == Fx::Cha && random01() * 100.0f >= n.fxVal) continue;
+        if (n.pitch == SeqNote::kEmpty) {
+            if (col.key >= 0)
+                for (const StepFx& f : st.fx) applyFx(col, f.fx, f.val);
+            continue;
+        }
+        if (n.isNote() && (!rowOn || (n.fx == Fx::Cha && random01() * 100.0f >= n.fxVal))) continue;
         col.pending  = true;
         col.pend     = n;
-        col.pendTick = n.isNote() && n.fx == Fx::Dly ? std::min<int>(n.fxVal, kTicksPerStep - 1) : 0;
+        col.pendTick = n.isNote() && n.fx == Fx::Dly ? std::min<int>(n.fxVal, kTicksPerStep - 1) : rowDly;
+    }
+}
+
+void Sequencer::applyFx(Column& col, Fx fx, int val) {
+    const int tickInStep = int(tick_ % kTicksPerStep);
+    switch (fx) {
+    case Fx::Ret:
+        col.retEvery = std::max(1, val);
+        col.retNext  = tickInStep + col.retEvery;
+        break;
+    case Fx::Arp: // ARP 00 stops an arpeggio
+        col.arp    = uint8_t(val);
+        col.arpAge = 0;
+        break;
+    case Fx::Kil: col.killAt = tick_ + std::max(1, val); break;
+    default: break;
     }
 }
 
@@ -202,19 +231,8 @@ void Sequencer::trigger(Instrument& inst, int track, Column& col, const SeqNote&
     col.gain = velocityGain(n.vel);
     if (grooveSteps_ > 0) col.gain *= grooveGain_[(tick_ / kTicksPerStep) % grooveSteps_];
     inst.noteOn(col.key, col.note, col.gain);
-    const int tickInStep = int(tick_ % kTicksPerStep);
-    switch (n.fx) {
-    case Fx::Ret:
-        col.retEvery = std::max<int>(1, n.fxVal);
-        col.retNext  = tickInStep + col.retEvery;
-        break;
-    case Fx::Arp:
-        col.arp    = n.fxVal;
-        col.arpAge = 0;
-        break;
-    case Fx::Kil: col.killAt = tick_ + std::max<int>(1, n.fxVal); break;
-    default: break;
-    }
+    applyFx(col, n.fx, n.fxVal);
+    for (const StepFx& f : patterns[track].steps[step_[track]].fx) applyFx(col, f.fx, f.val);
 }
 
 void Sequencer::fireTick(Instrument* const* inst) {
