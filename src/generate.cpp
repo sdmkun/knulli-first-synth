@@ -279,6 +279,13 @@ constexpr int kProgCount = sizeof(kProgs) / sizeof(kProgs[0]);
 
 const int kMinor[7] = {0, 2, 3, 5, 7, 8, 10};
 
+// Insertion sort for a chord's few notes (std::sort on these small arrays
+// trips a false -Warray-bounds in GCC 12).
+void sortNotes(int* p, int n) {
+    for (int i = 1; i < n; ++i)
+        for (int j = i; j > 0 && p[j - 1] > p[j]; --j) std::swap(p[j - 1], p[j]);
+}
+
 // Pitches (low to high) of the chord on `degree`, stacked in thirds of a
 // seven-note scale. Pentatonic and blues scales borrow natural minor here.
 int chordPitches(int degree, int count, bool sus, int octave, const ScaleInfo& in, int* out) {
@@ -293,7 +300,7 @@ int chordPitches(int degree, int count, bool sus, int octave, const ScaleInfo& i
         if (k == 1 && count == 6) continue;
         out[n++] = degreePitch(degree + order[k], octave, s);
     }
-    std::sort(out, out + n);
+    sortNotes(out, n);
     return n;
 }
 
@@ -305,7 +312,7 @@ void voiceLead(int* p, int n, const int* prev, int prevN, int centre) {
     for (int inv = 0; inv < n; ++inv) {
         for (int shift = -2; shift <= 1; ++shift) {
             for (int i = 0; i < n; ++i) cand[i] = p[i] + (i < inv ? 12 : 0) + 12 * shift;
-            std::sort(cand, cand + n);
+            sortNotes(cand, n);
             int score = 0;
             if (prevN > 0) {
                 for (int i = 0; i < n; ++i) score += std::abs(cand[i] - prev[std::min(i * prevN / n, prevN - 1)]);
@@ -415,11 +422,11 @@ void generateChords(Pattern& p, const ChordGen& g, const ScaleInfo& s) {
             voiceLead(pitches, n, prev, prevN, centre);
             if (g.voicing == ChordVoicing::Open && n >= 3) { // drop 2: second from the top goes down an octave
                 pitches[n - 2] -= 12;
-                std::sort(pitches, pitches + n);
+                sortNotes(pitches, n);
             } else if (g.voicing == ChordVoicing::Spread && n >= 3) { // every other note up an octave
                 for (int i = 1; i < n; i += 2) pitches[i] += 12;
                 pitches[0] -= 12;
-                std::sort(pitches, pitches + n);
+                sortNotes(pitches, n);
             }
         }
         std::copy(pitches, pitches + n, prev);
