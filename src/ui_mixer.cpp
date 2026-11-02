@@ -1,5 +1,6 @@
-// MIXER: the four tracks' volumes with level meters, and each track's EVOLVE
-// settings (keep mutating while it plays). Reached from SESSION with Y + down.
+// MIXER: the four tracks' volumes with level meters, pan, reverb send and
+// sidechain ducking, each track's EVOLVE settings (keep mutating while it
+// plays), and the song-wide groove and reverb. Reached from SESSION with Y + down.
 
 #include <algorithm>
 #include <cmath>
@@ -9,17 +10,20 @@
 
 namespace {
 
-enum { R_VOLUME, R_EVOLVE, R_AMOUNT, R_MODE, R_GROOVE, R_COUNT }; // R_GROOVE spans all tracks
+// Per-track rows, then two song-wide ones.
+enum { R_VOLUME, R_PAN, R_SEND, R_DUCK, R_EVOLVE, R_AMOUNT, R_MODE, R_GROOVE, R_REVERB, R_COUNT };
 
 constexpr int kGridX   = 76;
 constexpr int kColW    = 236;
 constexpr int kTitleY  = 70;
-constexpr int kFaderY  = 136;
-constexpr int kFaderH  = 240;
-constexpr int kFieldY  = 420;
-constexpr int kGrooveY = 570;
+constexpr int kFaderY  = 128;
+constexpr int kFaderH  = 150;
+constexpr int kFieldY  = 322;
+constexpr int kFieldH  = 32;
+constexpr int kGrooveY = 556;
+constexpr int kReverbY = 596;
 enum { G_NAME, G_TIMING, G_VEL, G_COUNT }; // fields of the groove row
-constexpr int kFieldH  = 40;
+enum { V_SIZE, V_TONE, V_DUCKTIME, V_COUNT }; // fields of the reverb row
 
 Cursor& cursor(App& a) {
     Cursor& c = a.mixCur;
@@ -39,7 +43,7 @@ float meterNorm(float peak) {
 void draw(App& a) {
     SDL_Renderer* r = a.renderer;
     const Cursor& c = cursor(a);
-    float    vol[kTracks], peak[kTracks];
+    float    vol[kTracks], peak[kTracks], pan[kTracks], send[kTracks], duck[kTracks];
     Evolve   evo[kTracks];
     int      loops[kTracks];
     bool     playing;
@@ -47,6 +51,9 @@ void draw(App& a) {
         AudioLock lock(a.audio);
         for (int t = 0; t < kTracks; ++t) {
             vol[t]          = a.seq.volume[t];
+            pan[t]          = a.seq.pan[t];
+            send[t]         = a.seq.send[t];
+            duck[t]         = a.seq.duck[t];
             peak[t]         = a.seq.level[t];
             a.seq.level[t]  = 0.0f;
             loops[t]        = a.seq.loops(t);
@@ -63,7 +70,7 @@ void draw(App& a) {
         a.meter[t] = std::max(meterNorm(peak[t]), a.meter[t] - 0.007f);
 
         const int  x   = kGridX + t * kColW;
-        const bool sel = t == c.col && c.row != R_GROOVE;
+        const bool sel = t == c.col && c.row < R_GROOVE;
         fillRect(r, x, kTitleY, kColW - 6, 48, sel ? kPanel2 : kPanel);
         if (sel) fillRect(r, x, kTitleY + 46, kColW - 6, 2, kAccent);
         std::string name = fmt("%d %s", t + 1, trackName(a, t).c_str());
@@ -91,17 +98,20 @@ void draw(App& a) {
         drawTextCentered(r, x + (kColW - 6) / 2, bottom + 14, 2, fmt("%d%%", int(std::lround(vol[t] * 100.0f))),
                          fsel ? kAccent : kText);
 
-        // EVOLVE settings.
-        const std::string values[R_MODE + 1] = {"", everyText(kEvolveEvery[evo[t].every]),
-                                             fmt("%d%%", int(std::lround(evo[t].amount * 100.0f))),
+        // Pan, send, duck and the EVOLVE settings.
+        auto pct = [](float v) { return fmt("%d%%", int(std::lround(v * 100.0f))); };
+        int  pv  = int(std::lround(pan[t] * 100.0f));
+        const std::string values[R_MODE + 1] = {"", pv == 0 ? "C" : fmt("%c%d", pv < 0 ? 'L' : 'R', std::abs(pv)),
+                                             pct(send[t]), a.isDrum[t] ? "-" : pct(duck[t]),
+                                             everyText(kEvolveEvery[evo[t].every]), pct(evo[t].amount),
                                              evo[t].vary ? "VARY" : "DRIFT"};
-        const char*       labels[R_MODE + 1] = {"", "EVOLVE", "AMOUNT", "MODE"};
-        for (int row = R_EVOLVE; row <= R_MODE; ++row)
+        const char* labels[R_MODE + 1] = {"", "PAN", "REVERB", "DUCK", "EVOLVE", "AMOUNT", "MODE"};
+        for (int row = R_PAN; row <= R_MODE; ++row)
             drawField(r, x + 12, kFieldY + (row - 1) * kFieldH, labels[row], values[row], sel && c.row == row,
                       x + 100);
         int every = kEvolveEvery[evo[t].every];
         if (every > 1 && playing) // how far it is to the next change
-            drawBar(r, x + 12, kFieldY + 3 * kFieldH + 2, kColW - 30, 6, float(evo[t].count) / every, kPlayCol);
+            drawBar(r, x + 12, kFieldY + (R_MODE - 1) * kFieldH + 24, kColW - 30, 4, float(evo[t].count) / every, kPlayCol);
     }
     // Groove (song-wide): which one, and how much of its timing and accents.
     fillRect(r, 16, kGrooveY - 8, kW - 32, 34, kPanel);
@@ -113,12 +123,22 @@ void draw(App& a) {
               grow && a.mixGrooveCol == G_TIMING, 618);
     drawField(r, 720, kGrooveY, "VELOCITY", on ? fmt("%d%%", int(std::lround(a.grooveVelocity * 100.0f))) : "-",
               grow && a.mixGrooveCol == G_VEL, 832);
-    drawText(r, 24, kGrooveY + 36, 2, "EVOLVE: MUTATE EVERY N LOOPS.  VARY: AROUND YOUR PATTERN  DRIFT: AWAY", kDim);
+    // Reverb (song-wide) and how fast DUCK lets go.
+    fillRect(r, 16, kReverbY - 8, kW - 32, 34, kPanel);
+    const bool vrow = c.row == R_REVERB;
+    drawField(r, 28, kReverbY, "REVERB SIZE", fmt("%d%%", int(std::lround(a.seq.reverbSize * 100.0f))),
+              vrow && a.mixReverbCol == V_SIZE, 180);
+    drawField(r, 300, kReverbY, "TONE", fmt("%d%%", int(std::lround(a.seq.reverbTone * 100.0f))),
+              vrow && a.mixReverbCol == V_TONE, 370);
+    drawField(r, 500, kReverbY, "DUCK RELEASE", fmt("%dMS", int(std::lround((0.04f + 0.36f * a.seq.duckTime) * 1000.0f))),
+              vrow && a.mixReverbCol == V_DUCKTIME, 672);
+    drawText(r, 24, kReverbY + 34, 2, "DUCK: THE KICK (PAD 1) OF A DRUM TRACK PUMPS THIS TRACK", kDim);
 }
 
 void move(App& a, int dx, int dy) {
     Cursor& c = cursor(a);
     if (c.row == R_GROOVE) a.mixGrooveCol = std::clamp(a.mixGrooveCol + dx, 0, G_COUNT - 1);
+    else if (c.row == R_REVERB) a.mixReverbCol = std::clamp(a.mixReverbCol + dx, 0, V_COUNT - 1);
     else a.track = std::clamp(a.track + dx, 0, kTracks - 1);
     c.row += dy;
     cursor(a);
@@ -138,8 +158,20 @@ void edit(App& a, int fine, int coarse) {
         e.every = std::clamp(e.every + fine + coarse, 0, Evolve::kChoices - 1);
         e.count = 0;
         break;
+    case R_PAN:    a.seq.pan[c.col] = std::clamp(a.seq.pan[c.col] + fine * 0.05f + coarse * 0.25f, -1.0f, 1.0f); break;
+    case R_SEND:   a.seq.send[c.col] = std::clamp(a.seq.send[c.col] + fine * 0.01f + coarse * 0.1f, 0.0f, 1.0f); break;
+    case R_DUCK:
+        if (!a.isDrum[c.col]) a.seq.duck[c.col] = std::clamp(a.seq.duck[c.col] + fine * 0.01f + coarse * 0.1f, 0.0f, 1.0f);
+        break;
     case R_AMOUNT: e.amount = std::clamp(e.amount + fine * 0.01f + coarse * 0.1f, 0.0f, 1.0f); break;
     case R_MODE:   e.vary = !e.vary, e.hasBase = false; break;
+    case R_REVERB: {
+        float& v = a.mixReverbCol == V_SIZE ? a.seq.reverbSize : a.mixReverbCol == V_TONE ? a.seq.reverbTone : a.seq.duckTime;
+        v        = std::clamp(v + fine * 0.01f + coarse * 0.1f, 0.0f, 1.0f);
+        a.seq.reverb.setSize(a.seq.reverbSize);
+        a.seq.reverb.setTone(a.seq.reverbTone);
+        break;
+    }
     case R_GROOVE:
         if (a.mixGrooveCol == G_NAME) {
             const int n = int(a.grooves.size()) + 1;
@@ -177,8 +209,20 @@ void clear(App& a) {
     switch (c.row) {
     case R_VOLUME: a.seq.volume[c.col] = 1.0f; break;
     case R_EVOLVE: e.every = 0, e.count = 0; break;
+    case R_PAN:    a.seq.pan[c.col] = 0.0f; break;
+    case R_SEND:   a.seq.send[c.col] = 0.0f; break;
+    case R_DUCK:   a.seq.duck[c.col] = 0.0f; break;
     case R_AMOUNT: e.amount = Evolve{}.amount; break;
     case R_MODE:   e.vary = Evolve{}.vary, e.hasBase = false; break;
+    case R_REVERB: {
+        const Sequencer fresh{};
+        if (a.mixReverbCol == V_SIZE) a.seq.reverbSize = fresh.reverbSize;
+        else if (a.mixReverbCol == V_TONE) a.seq.reverbTone = fresh.reverbTone;
+        else a.seq.duckTime = fresh.duckTime;
+        a.seq.reverb.setSize(a.seq.reverbSize);
+        a.seq.reverb.setTone(a.seq.reverbTone);
+        break;
+    }
     case R_GROOVE:
         if (a.mixGrooveCol == G_NAME) a.groove = -1;
         else if (a.groove >= 0 && a.mixGrooveCol == G_TIMING) a.grooveTiming = a.grooves[a.groove].timing;
@@ -192,5 +236,5 @@ void clear(App& a) {
 
 const ScreenOps kMixerScreen = {
     "MIXER", draw, move, edit, enter, clear, nullptr,
-    "A+PAD:EDIT  B+A:RESET  L3/R3:MUTE/SOLO  Y+UP:SESSION",
+    "A+PAD:EDIT  B+A:RESET  L1/R1:TRACK  L3/R3:MUTE/SOLO  Y+UP:SESSION",
 };

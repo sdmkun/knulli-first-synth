@@ -38,6 +38,10 @@ struct ParamDesc {
 };
 
 const char* trigName(int t) { return t ? "RETRIG" : "FREE"; }
+const char* unisonName(int u) {
+    static const char* kNames[kMaxUnison] = {"1", "2", "3", "4", "5", "6", "7"};
+    return kNames[std::clamp(u, 0, kMaxUnison - 1)];
+}
 
 constexpr int kWaves = int(Wave::Count), kFilters = int(FilterType::Count), kShapes = int(LfoShape::Count),
               kDests = int(ModDest::Count);
@@ -47,6 +51,8 @@ const ParamDesc kDesc[P_COUNT] = {
     {"POS", Kind::Unit, &Params::pos, nullptr, 0, nullptr},
     {"PITCH", Kind::Semis, nullptr, &Params::transpose, 0, nullptr},
     {"DETUNE", Kind::Unit, &Params::detune, nullptr, 0, nullptr},
+    {"UNISON", Kind::Enum, nullptr, &Params::unison, kMaxUnison, unisonName},
+    {"SPREAD", Kind::Unit, &Params::spread, nullptr, 0, nullptr},
     {"SUB", Kind::Unit, &Params::sub, nullptr, 0, nullptr},
     {"NOISE", Kind::Unit, &Params::noise, nullptr, 0, nullptr},
     {"FILTER", Kind::Enum, nullptr, &Params::filter, kFilters, filterName},
@@ -54,6 +60,8 @@ const ParamDesc kDesc[P_COUNT] = {
     {"RESO", Kind::Unit, &Params::resonance, nullptr, 0, nullptr},
     {"DRIVE", Kind::Unit, &Params::drive, nullptr, 0, nullptr},
     {"VOLUME", Kind::Unit, &Params::volume, nullptr, 0, nullptr},
+    {"WIDTH", Kind::Unit, &Params::width, nullptr, 0, nullptr},
+    {"CHORUS", Kind::Unit, &Params::chorus, nullptr, 0, nullptr},
     {"DLY TIME", Kind::Unit, &Params::delayTime, nullptr, 0, nullptr},
     {"DLY FDBK", Kind::Unit, &Params::delayFeedback, nullptr, 0, nullptr},
     {"DLY MIX", Kind::Unit, &Params::delayMix, nullptr, 0, nullptr},
@@ -199,6 +207,7 @@ void setTrackType(App& a, int t, bool drum) {
     AudioLock lock(a.audio);
     a.inst[t]->allOff();
     a.isDrum[t] = drum;
+    a.seq.drumTrack[t] = drum;
     a.inst[t]   = drum ? static_cast<Instrument*>(&a.drums[t]) : &a.synths[t];
     // The notes of one type mean nothing to the other.
     pushUndo(a, t);
@@ -275,7 +284,8 @@ std::string synthParamText(const Params& p, int id) {
         float hz = cutoffHz(p.cutoff);
         return hz >= 1000.0f ? fmt("%.1fKHZ", hz / 1000.0f) : fmt("%dHZ", int(hz));
     }
-    case P_DETUNE:   return fmt("%.1fCT", detuneCents(p.detune));
+    case P_DETUNE:   return p.unison > 0 ? "-" : fmt("%.1fCT", detuneCents(p.detune));
+    case P_SPREAD:   return p.unison > 0 ? fmt("%.1fCT", spreadCents(p.spread)) : "-";
     case P_DLY_TIME: return seconds(delaySec(p.delayTime));
     case P_DLY_FDBK: return percent(delayFeedbackGain(p.delayFeedback));
     case P_AMP_A:    return seconds(attackSec(p.ampA));

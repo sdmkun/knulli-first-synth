@@ -5,10 +5,12 @@
 
 #include "instrument.h"
 
-// A mono sample loaded from a WAV file.
+// A sample loaded from a WAV file: `data` is mono or the left channel, `right`
+// is the right channel of a stereo file (empty for mono).
 struct Sample {
     std::string        name; // shown on the pad
     std::vector<float> data;
+    std::vector<float> right;
     int                rate = 48000;
 };
 
@@ -20,7 +22,7 @@ struct Kit {
     Sample      pads[kPads];
 };
 
-// Reads a PCM (8/16/24/32-bit) or float WAV and mixes it down to mono.
+// Reads a PCM (8/16/24/32-bit) or float WAV, mono or stereo (more channels: the first two).
 bool loadWav(const std::string& path, Sample& out, std::string& error);
 
 // "01-Kick_808.wav" -> "KICK_808", the name a sample shows on its pad.
@@ -42,6 +44,7 @@ public:
         float start  = 0.0f; // 0..1 of the sample
         float end    = 1.0f;
         float volume = 0.8f;
+        float pan    = 0.0f; // -1 left .. 1 right
     };
 
     void init(int sampleRate) { sampleRate_ = sampleRate; }
@@ -55,7 +58,7 @@ public:
     void setPitch(int, int) override {}
     void kill(int key) override;
     void allOff() override;
-    void render(float* out, int frames) override;
+    void render(float* left, float* right, int frames) override;
     int  activeVoices() const override;
 
     PadSettings pads[Kit::kPads];
@@ -68,6 +71,7 @@ private:
         double        inc    = 1.0;
         double        end    = 0.0;
         float         gain   = 0.0f;
+        float         gainL  = 0.0f, gainR = 0.0f;
         unsigned      age    = 0;
     };
 

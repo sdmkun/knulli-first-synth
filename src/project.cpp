@@ -32,12 +32,13 @@ const FloatParam kFloats[] = {
     {"ampR", &Params::ampR}, {"envA", &Params::envA}, {"envD", &Params::envD}, {"envS", &Params::envS},
     {"envR", &Params::envR}, {"envAmt", &Params::envAmt}, {"lfo1Rate", &Params::lfo1Rate},
     {"lfo1Amt", &Params::lfo1Amt}, {"lfo2Rate", &Params::lfo2Rate}, {"lfo2Amt", &Params::lfo2Amt},
+    {"spread", &Params::spread}, {"width", &Params::width}, {"chorus", &Params::chorus},
 };
 const IntParam kInts[] = {
     {"wave", &Params::wave}, {"transpose", &Params::transpose}, {"filter", &Params::filter},
     {"envDest", &Params::envDest}, {"lfo1Shape", &Params::lfo1Shape}, {"lfo1Dest", &Params::lfo1Dest},
     {"lfo1Trig", &Params::lfo1Trig}, {"lfo2Shape", &Params::lfo2Shape}, {"lfo2Dest", &Params::lfo2Dest},
-    {"lfo2Trig", &Params::lfo2Trig},
+    {"lfo2Trig", &Params::lfo2Trig}, {"unison", &Params::unison},
 };
 
 // ---------------------------------------------------------------- patterns
@@ -131,9 +132,9 @@ Json projectJson(App& a) {
     Pattern live[kTracks];
     int     slot[kTracks];
     bool    mute[kTracks];
-    float   volume[kTracks];
+    float   volume[kTracks], pan[kTracks], send[kTracks], duck[kTracks];
     int     solo;
-    float   bpm, swing;
+    float   bpm, swing, revSize, revTone, duckTime;
     {
         AudioLock lock(a.audio);
         for (int t = 0; t < kTracks; ++t) {
@@ -141,7 +142,13 @@ Json projectJson(App& a) {
             slot[t]   = a.seq.slot[t];
             mute[t]   = a.seq.mute[t];
             volume[t] = a.seq.volume[t];
+            pan[t]    = a.seq.pan[t];
+            send[t]   = a.seq.send[t];
+            duck[t]   = a.seq.duck[t];
         }
+        revSize  = a.seq.reverbSize;
+        revTone  = a.seq.reverbTone;
+        duckTime = a.seq.duckTime;
         solo  = a.seq.solo;
         bpm   = a.seq.bpm();
         swing = a.seq.swing();
@@ -158,6 +165,9 @@ Json projectJson(App& a) {
     j.set("grooveTiming", a.grooveTiming);
     j.set("grooveVelocity", a.grooveVelocity);
     j.set("solo", solo);
+    j.set("reverbSize", revSize);
+    j.set("reverbTone", revTone);
+    j.set("duckRelease", duckTime);
 
     Json& tracks = j.set("tracks", Json::array());
     for (int t = 0; t < kTracks; ++t) {
@@ -165,6 +175,9 @@ Json projectJson(App& a) {
         tr.set("type", a.isDrum[t] ? "drum" : "synth");
         tr.set("volume", volume[t]);
         tr.set("mute", mute[t]);
+        tr.set("pan", pan[t]);
+        tr.set("reverb", send[t]);
+        tr.set("duck", duck[t]);
 
         Json& syn = tr.set("synth", Json::object());
         syn.set("preset", kPresets[a.preset[t]].name);
@@ -184,6 +197,7 @@ Json projectJson(App& a) {
             pad.set("start", ps.start);
             pad.set("end", ps.end);
             pad.set("volume", ps.volume);
+            pad.set("pan", ps.pan);
             pads.push(std::move(pad));
         }
 
@@ -236,6 +250,11 @@ void applyProject(App& a, const Json& j) {
         a.seq.setBpm(float(j["bpm"].num(a.seq.bpm())));
         a.seq.setSwing(float(j["swing"].num(a.seq.swing())));
         a.seq.solo = std::clamp(j["solo"].integer(-1), -1, kTracks - 1);
+        a.seq.reverbSize = std::clamp(float(j["reverbSize"].num(a.seq.reverbSize)), 0.0f, 1.0f);
+        a.seq.reverbTone = std::clamp(float(j["reverbTone"].num(a.seq.reverbTone)), 0.0f, 1.0f);
+        a.seq.duckTime   = std::clamp(float(j["duckRelease"].num(a.seq.duckTime)), 0.0f, 1.0f);
+        a.seq.reverb.setSize(a.seq.reverbSize);
+        a.seq.reverb.setTone(a.seq.reverbTone);
     }
     a.root = std::clamp(j["root"].integer(a.root), 0, 11);
     std::string scale = j["scale"].str();
@@ -271,6 +290,7 @@ void applyProject(App& a, const Json& j) {
             p.wave      = std::clamp(p.wave, 0, int(Wave::Count) - 1);
             p.filter    = std::clamp(p.filter, 0, int(FilterType::Count) - 1);
             p.transpose = std::clamp(p.transpose, -24, 24);
+            p.unison    = std::clamp(p.unison, 0, kMaxUnison - 1);
             for (int* e : {&p.envDest, &p.lfo1Dest, &p.lfo2Dest}) *e = std::clamp(*e, 0, int(ModDest::Count) - 1);
             for (int* e : {&p.lfo1Shape, &p.lfo2Shape}) *e = std::clamp(*e, 0, int(LfoShape::Count) - 1);
         }
@@ -290,6 +310,7 @@ void applyProject(App& a, const Json& j) {
                 ps.start  = std::clamp(float(pj["start"].num(ps.start)), 0.0f, 1.0f);
                 ps.end    = std::clamp(float(pj["end"].num(ps.end)), 0.0f, 1.0f);
                 ps.volume = std::clamp(float(pj["volume"].num(ps.volume)), 0.0f, 1.0f);
+                ps.pan    = std::clamp(float(pj["pan"].num(0.0)), -1.0f, 1.0f);
             }
             std::string sample = pj["sample"].str();
             if (!sample.empty()) setPadSample(a, t, i, resolve(sample, a.samplesDir));
@@ -338,6 +359,9 @@ void applyProject(App& a, const Json& j) {
         a.seq.slot[t]   = std::clamp(tr["slot"].integer(-1), -1, kSlots - 1);
         a.seq.volume[t] = std::clamp(float(tr["volume"].num(1.0)), 0.0f, Sequencer::kMaxVolume);
         a.seq.mute[t]   = tr["mute"].boolean(false);
+        a.seq.pan[t]    = std::clamp(float(tr["pan"].num(0.0)), -1.0f, 1.0f);
+        a.seq.send[t]   = std::clamp(float(tr["reverb"].num(0.0)), 0.0f, 1.0f);
+        a.seq.duck[t]   = std::clamp(float(tr["duck"].num(0.0)), 0.0f, 1.0f);
         a.hasUndo[t]    = false;
     }
 }

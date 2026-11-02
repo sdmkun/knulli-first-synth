@@ -57,9 +57,9 @@ extern const char*  kNoteNames[12];
 // Synth parameters as the UI sees them. The first kInstrParams are on INSTR,
 // the rest (envelopes and LFOs) on MODS.
 enum ParamId {
-    P_WAVE, P_POS, P_PITCH, P_DETUNE, P_SUB, P_NOISE,
-    P_FILTER, P_CUTOFF, P_RESO, P_DRIVE, P_VOLUME,
-    P_DLY_TIME, P_DLY_FDBK, P_DLY_MIX,
+    P_WAVE, P_POS, P_PITCH, P_DETUNE, P_UNISON, P_SPREAD, P_SUB, P_NOISE,
+    P_FILTER, P_CUTOFF, P_RESO, P_DRIVE,
+    P_VOLUME, P_WIDTH, P_CHORUS, P_DLY_TIME, P_DLY_FDBK, P_DLY_MIX,
     P_AMP_A, P_AMP_D, P_AMP_S, P_AMP_R,
     P_ENV_A, P_ENV_D, P_ENV_S, P_ENV_R, P_ENV_DEST, P_ENV_AMT,
     P_L1_SHAPE, P_L1_RATE, P_L1_DEST, P_L1_AMT, P_L1_TRIG,
@@ -115,7 +115,7 @@ struct App {
     SDL_AudioDeviceID audio      = 0;
     int               channels   = 2;
     int               sampleRate = 48000;
-    std::vector<float> mono;
+    std::vector<float> left, right; // one buffer of the mix, before it is interleaved
 
     // DSP load = callback time / buffer duration, written by the audio thread.
     std::atomic<float> dspLoad{0.0f}; // smoothed
@@ -191,6 +191,7 @@ struct App {
     Cursor modsCur; // col = block (AMP ENV, ENV 2, LFO 1, LFO 2), row within it
     Cursor mixCur;  // col = track, row = VOLUME / EVOLVE / AMOUNT / MODE / GROOVE
     int    mixGrooveCol = 0; // on the GROOVE row: name, timing, velocity
+    int    mixReverbCol = 0; // on the REVERB row: size, tone, duck release
     float  meter[kTracks] = {}; // shown track levels, falling slowly
 
     bool   held[BTN_COUNT]     = {};

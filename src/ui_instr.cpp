@@ -13,7 +13,8 @@
 namespace {
 
 enum { ROW_TYPE, ROW_SOURCE, ROW_FIRST }; // TYPE, PRESET / KIT, then parameters or pads
-constexpr int kPadFields = 5; // SAMPLE, PITCH, START, END, VOL
+constexpr int kPadFields = 6; // SAMPLE, PITCH, START, END, VOL, PAN
+constexpr int kPadValues = kPadFields - 1;
 
 constexpr int kTop     = 72;
 constexpr int kRightX  = 640;
@@ -31,13 +32,13 @@ Cursor& cursor(App& a) {
 
 // ---------------------------------------------------------------- synth
 
-constexpr int kSynthRowH = 34;
-constexpr int kGroupGap  = 8; // extra space above FILTER and DLY TIME
+constexpr int kSynthRowH = 28;
+constexpr int kGroupGap  = 8; // extra space above FILTER and VOLUME
 
 int synthRowY(int row) {
     int y = kTop + row * kSynthRowH;
     if (row >= ROW_FIRST + P_FILTER) y += kGroupGap;
-    if (row >= ROW_FIRST + P_DLY_TIME) y += kGroupGap;
+    if (row >= ROW_FIRST + P_VOLUME) y += kGroupGap;
     return y;
 }
 
@@ -106,11 +107,17 @@ void editSynth(App& a, const Cursor& c, int fine, int coarse) {
 
 constexpr int kPadRowY = kTop + 96;
 constexpr int kPadRowH = 52;
-const char*   kPadCols[4] = {"PITCH", "START", "END", "VOL"};
-constexpr int kPadColX[4] = {230, 330, 430, 530};
+const char*   kPadCols[kPadValues] = {"PITCH", "START", "END", "VOL", "PAN"};
+constexpr int kPadColX[kPadValues] = {222, 302, 382, 462, 542};
 
-std::string padValue(const DrumKit::PadSettings& s, int col) { // col 0..3 = PITCH..VOL
+std::string panText(float pan) {
+    int v = int(std::lround(pan * 100.0f));
+    return v == 0 ? "C" : fmt("%c%d", v < 0 ? 'L' : 'R', std::abs(v));
+}
+
+std::string padValue(const DrumKit::PadSettings& s, int col) { // col 0..4 = PITCH..PAN
     switch (col) {
+    case 4:  return panText(s.pan);
     case 0:  return fmt("%+d", s.pitch);
     case 1:  return fmt("%d%%", int(s.start * 100.0f + 0.5f));
     case 2:  return fmt("%d%%", int(s.end * 100.0f + 0.5f));
@@ -156,7 +163,7 @@ void drawDrums(App& a, const Cursor& c) {
     drawField(r, 40, kTop + 34, "KIT", kit, c.row == ROW_SOURCE, 230);
 
     drawText(r, 40, kPadRowY - 26, 2, "PAD SAMPLE", kDim);
-    for (int col = 0; col < 4; ++col) drawText(r, kPadColX[col], kPadRowY - 26, 2, kPadCols[col], kDim);
+    for (int col = 0; col < kPadValues; ++col) drawText(r, kPadColX[col], kPadRowY - 26, 2, kPadCols[col], kDim);
     for (int pad = 0; pad < kDrumPads; ++pad) {
         int  row    = ROW_FIRST + pad;
         int  y      = kPadRowY + pad * kPadRowH;
@@ -165,12 +172,12 @@ void drawDrums(App& a, const Cursor& c) {
         std::string name = fmt("%d %s", pad + 1, padName(a, t, pad).c_str());
         if (name.size() > 14) name.resize(14);
         bool onName = curRow && c.col == 0;
-        if (onName) fillRect(r, 28, y + 6, 186, kPadRowH - 18, kCursorBg);
+        if (onName) fillRect(r, 28, y + 6, 180, kPadRowH - 18, kCursorBg);
         drawText(r, 36, y + 15, 2, name, onName ? kAccent : curRow ? kText : kDim);
-        for (int col = 0; col < 4; ++col) {
+        for (int col = 0; col < kPadValues; ++col) {
             bool        cur = curRow && c.col == col + 1;
             std::string v   = padValue(pads[pad], col);
-            if (cur) fillRect(r, kPadColX[col] - 8, y + 6, 88, kPadRowH - 18, kCursorBg);
+            if (cur) fillRect(r, kPadColX[col] - 8, y + 6, 76, kPadRowH - 18, kCursorBg);
             drawText(r, kPadColX[col], y + 15, 2, v, cur ? kAccent : kText);
         }
     }
@@ -211,6 +218,7 @@ void editDrums(App& a, const Cursor& c, int fine, int coarse) {
     case 1: s.start = std::clamp(s.start + fine * 0.01f + coarse * 0.1f, 0.0f, s.end - 0.01f); break;
     case 2: s.end = std::clamp(s.end + fine * 0.01f + coarse * 0.1f, s.start + 0.01f, 1.0f); break;
     case 3: s.volume = std::clamp(s.volume + fine * 0.02f + coarse * 0.1f, 0.0f, 1.0f); break;
+    case 4: s.pan = std::clamp(s.pan + fine * 0.05f + coarse * 0.25f, -1.0f, 1.0f); break;
     }
 }
 

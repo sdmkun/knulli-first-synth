@@ -25,7 +25,9 @@ struct Params {
     int   wave      = int(Wave::Saw);
     float pos       = 0.0f; // wavetable position, or pulse width for SQUARE
     int   transpose = 0;    // semitones, -24..+24
-    float detune    = 0.0f; // second oscillator, 0..30 cents
+    float detune    = 0.0f; // second oscillator, 0..30 cents (with UNISON 1)
+    int   unison    = 0;    // extra oscillators: 0 = one, up to 6 = seven (a supersaw)
+    float spread    = 0.4f; // how far the unison oscillators are detuned, 0..50 cents
     float sub       = 0.0f; // square one octave down
     float noise     = 0.0f;
     // Filter and amp
@@ -34,6 +36,9 @@ struct Params {
     float resonance = 0.2f;
     float drive     = 0.0f; // saturation before the filter
     float volume    = 0.7f;
+    // Stereo
+    float width     = 0.0f; // pans the detuned / unison oscillators apart
+    float chorus    = 0.0f; // stereo chorus mix
     // Delay
     float delayTime     = 0.6f;
     float delayFeedback = 0.4f;
@@ -69,6 +74,8 @@ float lfoHz(float n);
 float delaySec(float n);
 float delayFeedbackGain(float n);
 float pulseWidth(float pos);
+float spreadCents(float n);
+constexpr int kMaxUnison = 7;
 // Full-scale modulation per destination.
 constexpr float kModPitchSemis  = 12.0f;
 constexpr float kModCutoffOct   = 6.0f;
@@ -88,7 +95,7 @@ public:
     void setPitch(int key, int note) override;
     void kill(int key) override;
     void allOff() override;
-    void render(float* out, int frames) override;
+    void render(float* left, float* right, int frames) override;
     int  activeVoices() const override;
 
     Params params;
@@ -101,14 +108,16 @@ private:
         float gain   = 1.0f; // velocity
         bool  gate   = false;
         bool  killed = false; // released by KIL: fades in a few ms instead of RELEASE
-        float phase1 = 0.0f, phase2 = 0.0f, phaseSub = 0.0f;
+        float ph[kMaxUnison] = {}; // oscillator phases: [0] main, [1] detuned copy, or the unison stack
+        float phaseSub = 0.0f;
         Stage ampStage = Idle;
         float amp      = 0.0f;
         Stage envStage = Idle;
         float env      = 0.0f;
         float lfoPhase[2] = {};
         float lfoHold[2]  = {}; // sample & hold value
-        float ic1 = 0.0f, ic2 = 0.0f; // SVF integrator states
+        float ic1 = 0.0f, ic2 = 0.0f; // SVF integrator states (left, or mono)
+        float ir1 = 0.0f, ir2 = 0.0f; // right
     };
 
     float classic(int wave, float phase, float dt, float pw);
@@ -125,4 +134,8 @@ private:
     float delaySmooth_ = -1.0f; // current delay length in samples, glides toward the target
     int   silentRun_   = 0;     // consecutive silent samples written to the delay line
     bool  delayInUse_  = false;
+
+    std::vector<float> chorusBuf_; // a short line for the stereo chorus
+    int   chorusWrite_ = 0;
+    float chorusPhase_ = 0.0f;
 };

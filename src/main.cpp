@@ -31,11 +31,18 @@ void audioCallback(void* userdata, Uint8* stream, int len) {
     const int    total  = len / int(sizeof(float) * a.channels);
     int          frames = total;
     while (frames > 0) {
-        int n = std::min(frames, int(a.mono.size()));
-        a.seq.process(a.inst, a.mono.data(), n);
+        int n = std::min(frames, int(a.left.size()));
+        a.seq.process(a.inst, a.left.data(), a.right.data(), n);
         for (int i = 0; i < n; ++i) {
-            for (int c = 0; c < a.channels; ++c) *out++ = a.mono[i];
-            a.scope[a.scopePos] = a.mono[i];
+            const float l = a.left[i], r = a.right[i], m = 0.5f * (l + r);
+            if (a.channels == 1) {
+                *out++ = m;
+            } else {
+                *out++ = l;
+                *out++ = r;
+                for (int c = 2; c < a.channels; ++c) *out++ = 0.0f;
+            }
+            a.scope[a.scopePos] = m;
             a.scopePos          = (a.scopePos + 1) % 2048;
         }
         frames -= n;
@@ -391,6 +398,10 @@ void makeDefaultSong(App& a) {
     a.melodyGen[1].length  = 0.2f;
     regenerate(a, 1);
     if (a.isDrum[kTracks - 1]) regenerate(a, kTracks - 1);
+    // A little space, and the pad pumping with the kick.
+    a.seq.send[0] = 0.2f;
+    a.seq.send[2] = 0.35f;
+    a.seq.duck[2] = 0.5f;
     for (bool& h : a.hasUndo) h = false;
 }
 
@@ -450,7 +461,8 @@ int main(int argc, char* argv[]) {
     if (a.audio) {
         a.channels   = have.channels;
         a.sampleRate = have.freq;
-        a.mono.resize(std::max<int>(have.samples, 512));
+        a.left.resize(std::max<int>(have.samples, 512));
+        a.right.resize(a.left.size());
         for (Synth& s : a.synths) s.init(have.freq);
         for (DrumKit& d : a.drums) d.init(have.freq);
         a.seq.init(have.freq);

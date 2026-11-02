@@ -77,27 +77,29 @@ bool loadWav(const std::string& path, Sample& out, std::string& error) {
     const int    bps    = bits / 8;
     const size_t frames = bytes / size_t(bps * channels);
     out.data.assign(frames, 0.0f);
+    out.right.clear();
+    if (channels >= 2) out.right.assign(frames, 0.0f); // stereo keeps its first two channels
     out.rate = rate;
-    for (size_t i = 0; i < frames; ++i) {
-        float sum = 0.0f;
-        for (int c = 0; c < channels; ++c) {
-            const uint8_t* p = data + (i * channels + c) * bps;
-            float          v = 0.0f;
-            if (format == 3) {
-                std::memcpy(&v, p, 4);
-            } else if (bits == 8) {
-                v = (int(p[0]) - 128) / 128.0f;
-            } else if (bits == 16) {
-                v = int16_t(le16(p)) / 32768.0f;
-            } else if (bits == 24) {
-                int32_t x = int32_t(uint32_t(p[0]) << 8 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 24) >> 8;
-                v         = x / 8388608.0f;
-            } else {
-                v = int32_t(le32(p)) / 2147483648.0f;
-            }
-            sum += v;
+    auto read = [&](size_t i, int c) {
+        const uint8_t* p = data + (i * channels + c) * bps;
+        float          v = 0.0f;
+        if (format == 3) {
+            std::memcpy(&v, p, 4);
+        } else if (bits == 8) {
+            v = (int(p[0]) - 128) / 128.0f;
+        } else if (bits == 16) {
+            v = int16_t(le16(p)) / 32768.0f;
+        } else if (bits == 24) {
+            int32_t x = int32_t(uint32_t(p[0]) << 8 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 24) >> 8;
+            v         = x / 8388608.0f;
+        } else {
+            v = int32_t(le32(p)) / 2147483648.0f;
         }
-        out.data[i] = sum / channels;
+        return v;
+    };
+    for (size_t i = 0; i < frames; ++i) {
+        out.data[i] = read(i, 0);
+        if (channels >= 2) out.right[i] = read(i, 1);
     }
     return true;
 }
@@ -163,6 +165,9 @@ void DrumKit::noteOn(int key, int note, float gain) {
     v->end    = std::min(v->end, len - 1.0);
     v->inc    = double(s.rate) / sampleRate_ * std::pow(2.0, ps.pitch / 12.0);
     v->gain   = ps.volume * ps.volume * gain;
+    const float pan = std::clamp(ps.pan, -1.0f, 1.0f);
+    v->gainL  = v->gain * std::min(1.0f, 1.0f - pan);
+    v->gainR  = v->gain * std::min(1.0f, 1.0f + pan);
     v->age    = ++counter_;
 }
 
@@ -183,20 +188,28 @@ int DrumKit::activeVoices() const {
     return n;
 }
 
-void DrumKit::render(float* out, int frames) {
-    std::fill(out, out + frames, 0.0f);
+void DrumKit::render(float* left, float* right, int frames) {
+    std::fill(left, left + frames, 0.0f);
+    std::fill(right, right + frames, 0.0f);
     for (Voice& v : voices_) {
         if (!v.sample) continue;
-        const float*  d    = v.sample->data.data();
+        const float*  dl   = v.sample->data.data();
+        const float*  dr   = v.sample->right.empty() ? dl : v.sample->right.data();
         const double  fade = 64.0 * v.inc; // short fade before END so cut samples don't click
         for (int i = 0; i < frames; ++i) {
             if (v.pos >= v.end) { v = Voice{}; break; }
             const int   i0   = int(v.pos);
             const float frac = float(v.pos - i0);
-            float       s    = d[i0] + (d[i0 + 1] - d[i0]) * frac;
-            const double left = v.end - v.pos;
-            if (left < fade) s *= float(left / fade);
-            out[i] += s * v.gain;
+            float       l    = dl[i0] + (dl[i0 + 1] - dl[i0]) * frac;
+            float       r    = dr[i0] + (dr[i0 + 1] - dr[i0]) * frac;
+            const double rest = v.end - v.pos;
+            if (rest < fade) {
+                const float k = float(rest / fade);
+                l *= k;
+                r *= k;
+            }
+            left[i] += l * v.gainL;
+            right[i] += r * v.gainR;
             v.pos += v.inc;
         }
     }

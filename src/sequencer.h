@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "reverb.h"
+
 class Instrument;
 
 // Note commands, played in ticks (kTicksPerStep per step):
@@ -78,13 +80,14 @@ class Sequencer {
 public:
     static constexpr int kTracks  = 4;
     static constexpr int kKeyBase = 100; // instrument keys for sequenced notes; auditions use lower ones
-    static constexpr int kKeys    = 64;  // keys rotate so a released note can ring out under the next one
+    static constexpr int kKeys    = 64;
+    static constexpr int kKickNote = 36; // pad 1 of a drum kit  // keys rotate so a released note can ring out under the next one
 
     void init(int sampleRate);
 
-    // Audio thread: renders and mixes every track's instrument into `out`,
-    // firing steps on time. `inst` holds kTracks instruments.
-    void process(Instrument* const* inst, float* out, int frames);
+    // Audio thread: renders and mixes every track's instrument into `left` /
+    // `right`, firing steps on time. `inst` holds kTracks instruments.
+    void process(Instrument* const* inst, float* left, float* right, int frames);
 
     void start();
     void stop(Instrument* const* inst);
@@ -114,6 +117,13 @@ public:
     int     solo          = -1;
     float   volume[kTracks] = {1.0f, 1.0f, 1.0f, 1.0f}; // track gain, 0..kMaxVolume
     float   level[kTracks]  = {};  // peak output per track since the UI last cleared it
+    float   pan[kTracks]    = {};  // -1 left .. 1 right
+    float   send[kTracks]   = {};  // into the reverb, 0..1
+    float   duck[kTracks]   = {};  // sidechain: how far a kick pushes the track down, 0..1
+    bool    drumTrack[kTracks] = {}; // the kick (pad 1) of a drum track drives the ducking
+    float   duckTime = 0.35f;      // 0..1: how fast the ducked tracks come back
+    float   reverbSize = 0.45f, reverbTone = 0.55f; // what the UI shows; pass them on to `reverb`
+    Reverb  reverb;
     static constexpr float kMaxVolume = 1.5f;
 
     // Called on the audio thread when an audible track wraps back to its first
@@ -179,5 +189,6 @@ private:
     Column cols_[kTracks][SeqStep::kMaxNotes];
     int    nextKey_[kTracks] = {};
 
-    std::vector<float> trackBuf_;
+    std::vector<float> trackL_, trackR_, sendBuf_;
+    float duckHold_ = 0.0f, duckEnv_ = 0.0f; // sidechain envelope: hold jumps on a kick, env follows it
 };

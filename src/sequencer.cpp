@@ -105,7 +105,12 @@ void Pattern::clear() {
 
 void Sequencer::init(int sampleRate) {
     sampleRate_ = sampleRate;
-    trackBuf_.assign(1024, 0.0f);
+    trackL_.assign(1024, 0.0f);
+    trackR_.assign(1024, 0.0f);
+    sendBuf_.assign(1024, 0.0f);
+    reverb.init(sampleRate);
+    reverb.setSize(reverbSize);
+    reverb.setTone(reverbTone);
     std::fill(std::begin(step_), std::end(step_), -1);
 }
 
@@ -243,6 +248,7 @@ void Sequencer::trigger(Instrument& inst, int track, Column& col, const SeqNote&
     col.gain = velocityGain(n.vel);
     if (grooveSteps_ > 0) col.gain *= grooveGain_[(tick_ / kTicksPerStep) % grooveSteps_];
     inst.noteOn(col.key, col.note, col.gain);
+    if (drumTrack[track] && col.note == kKickNote) duckHold_ = 1.0f;
     applyFx(col, n.fx, n.fxVal);
     for (const StepFx& f : patterns[track].steps[step_[track]].fx) applyFx(col, f.fx, f.val);
 }
@@ -300,30 +306,55 @@ void Sequencer::fireTick(Instrument* const* inst) {
     }
 }
 
-void Sequencer::process(Instrument* const* inst, float* out, int frames) {
+void Sequencer::process(Instrument* const* inst, float* left, float* right, int frames) {
+    // The duck comes back over 40 .. 400 ms (to -60 dB); its attack is about 1 ms.
+    const float duckRel = std::exp(std::log(0.001f) / ((0.04f + 0.36f * duckTime) * sampleRate_));
+    const float duckAtk = 1.0f - std::exp(-1.0f / (0.001f * sampleRate_));
     int done = 0;
     while (done < frames) {
         if (playing_ && untilTick_ <= 0.0) {
             fireTick(inst);
             untilTick_ += samplesPerTick();
         }
-        int n = std::min(frames - done, int(trackBuf_.size()));
+        int n = std::min(frames - done, int(trackL_.size()));
         if (playing_) n = std::clamp(int(std::ceil(untilTick_)), 1, n);
 
-        float* o = out + done;
-        std::fill(o, o + n, 0.0f);
+        // The sidechain envelope for this stretch (a kick only lands at its start).
+        float duckEnv[1024];
+        for (int i = 0; i < n; ++i) {
+            duckEnv_ += (duckHold_ - duckEnv_) * duckAtk;
+            duckHold_ *= duckRel;
+            duckEnv[i] = duckEnv_;
+        }
+
+        float* l = left + done;
+        float* r = right + done;
+        std::fill(l, l + n, 0.0f);
+        std::fill(r, r + n, 0.0f);
+        std::fill(sendBuf_.begin(), sendBuf_.begin() + n, 0.0f);
         for (int t = 0; t < kTracks; ++t) {
-            inst[t]->render(trackBuf_.data(), n);
+            inst[t]->render(trackL_.data(), trackR_.data(), n);
             const float g    = volume[t];
+            const float p    = std::clamp(pan[t], -1.0f, 1.0f);
+            const float gl   = g * std::min(1.0f, 1.0f - p), gr = g * std::min(1.0f, 1.0f + p);
+            const float d    = duck[t];
+            const float s    = send[t] * 0.5f;
             float       peak = level[t];
             for (int i = 0; i < n; ++i) {
-                const float v = trackBuf_[i] * g;
-                o[i] += v;
-                peak = std::max(peak, std::fabs(v));
+                const float k  = d > 0.0f ? 1.0f - d * duckEnv[i] : 1.0f;
+                const float vl = trackL_[i] * gl * k, vr = trackR_[i] * gr * k;
+                l[i] += vl;
+                r[i] += vr;
+                if (s > 0.0f) sendBuf_[i] += (vl + vr) * s;
+                peak = std::max(peak, std::max(std::fabs(vl), std::fabs(vr)));
             }
             level[t] = peak;
         }
-        for (int i = 0; i < n; ++i) o[i] = softClip(o[i] * 0.8f);
+        reverb.process(sendBuf_.data(), l, r, n); // idles by itself once the input and tail are silent
+        for (int i = 0; i < n; ++i) {
+            l[i] = softClip(l[i] * 0.8f);
+            r[i] = softClip(r[i] * 0.8f);
+        }
 
         if (playing_) untilTick_ -= n;
         done += n;

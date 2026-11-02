@@ -57,6 +57,7 @@ float decayMul(float sec, float sr, int step) { return std::exp(std::log(0.001f)
 Params brightSaw() {
     Params p;
     p.cutoff = 0.85f, p.resonance = 0.2f, p.ampA = 0.05f, p.ampR = 0.3f, p.detune = 0.3f;
+    p.width = 0.6f, p.chorus = 0.2f;
     return p;
 }
 Params softSine() {
@@ -95,6 +96,7 @@ Params hollowPulse() {
 Params warmPad() {
     Params p;
     p.cutoff = 0.48f, p.resonance = 0.25f, p.ampA = 0.8f, p.ampR = 0.85f, p.detune = 0.65f, p.volume = 0.65f;
+    p.unison = 4, p.spread = 0.35f, p.width = 0.8f, p.chorus = 0.3f;
     p.lfo1Dest = int(ModDest::Cutoff), p.lfo1Rate = 0.25f, p.lfo1Amt = 0.18f;
     p.delayTime = 0.8f, p.delayFeedback = 0.4f, p.delayMix = 0.3f;
     return p;
@@ -116,7 +118,7 @@ Params vowelPad() {
     Params p;
     p.wave = int(Wave::WtVowel), p.cutoff = 0.8f, p.resonance = 0.1f, p.ampA = 0.6f, p.ampR = 0.8f, p.detune = 0.4f;
     p.lfo2Dest = int(ModDest::Pos), p.lfo2Rate = 0.25f, p.lfo2Amt = 0.5f;
-    p.delayMix = 0.25f;
+    p.delayMix = 0.25f, p.width = 0.6f, p.chorus = 0.3f;
     return p;
 }
 Params syncLead() {
@@ -152,6 +154,51 @@ Params morphPluck() {
     p.envDest = int(ModDest::Cutoff), p.envAmt = 0.5f, p.envD = 0.3f;
     return p;
 }
+// Wide, thick sounds for electro and big-room leads and chords.
+Params superSaw() {
+    Params p;
+    p.unison = 6, p.spread = 0.45f, p.width = 0.9f, p.chorus = 0.15f;
+    p.cutoff = 0.9f, p.resonance = 0.1f, p.ampA = 0.01f, p.ampR = 0.35f, p.volume = 0.6f;
+    p.delayTime = 0.55f, p.delayFeedback = 0.3f, p.delayMix = 0.15f;
+    return p;
+}
+Params sawStab() {
+    Params p;
+    p.unison = 4, p.spread = 0.3f, p.width = 0.7f;
+    p.cutoff = 0.35f, p.resonance = 0.3f, p.ampA = 0.0f, p.ampD = 0.35f, p.ampS = 0.0f, p.ampR = 0.25f;
+    p.envDest = int(ModDest::Cutoff), p.envAmt = 0.6f, p.envD = 0.3f;
+    return p;
+}
+Params reeseBass() {
+    Params p;
+    p.unison = 1, p.spread = 0.25f, p.width = 0.2f, p.sub = 0.3f, p.drive = 0.3f;
+    p.cutoff = 0.35f, p.resonance = 0.25f, p.ampA = 0.0f, p.ampR = 0.15f;
+    p.lfo1Dest = int(ModDest::Cutoff), p.lfo1Rate = 0.15f, p.lfo1Amt = 0.15f;
+    return p;
+}
+Params widePluck() {
+    Params p;
+    p.unison = 2, p.spread = 0.2f, p.width = 0.8f, p.chorus = 0.2f;
+    p.cutoff = 0.3f, p.resonance = 0.3f, p.ampA = 0.0f, p.ampD = 0.45f, p.ampS = 0.0f, p.ampR = 0.35f;
+    p.envDest = int(ModDest::Cutoff), p.envAmt = 0.55f, p.envD = 0.28f;
+    p.delayTime = 0.5f, p.delayFeedback = 0.35f, p.delayMix = 0.25f;
+    return p;
+}
+Params sawPad() {
+    Params p;
+    p.unison = 6, p.spread = 0.3f, p.width = 1.0f, p.chorus = 0.35f, p.volume = 0.6f;
+    p.cutoff = 0.5f, p.resonance = 0.15f, p.ampA = 0.7f, p.ampR = 0.8f;
+    p.lfo1Dest = int(ModDest::Cutoff), p.lfo1Rate = 0.2f, p.lfo1Amt = 0.1f;
+    return p;
+}
+Params pulseLead() {
+    Params p;
+    p.wave = int(Wave::Square), p.pos = 0.3f, p.unison = 2, p.spread = 0.15f, p.width = 0.5f;
+    p.cutoff = 0.8f, p.resonance = 0.15f, p.ampA = 0.01f, p.ampR = 0.25f;
+    p.lfo1Dest = int(ModDest::Pitch), p.lfo1Rate = 0.72f, p.lfo1Amt = 0.02f;
+    p.delayTime = 0.5f, p.delayFeedback = 0.3f, p.delayMix = 0.2f;
+    return p;
+}
 } // namespace
 
 const Preset kPresets[] = {
@@ -160,6 +207,8 @@ const Preset kPresets[] = {
     {"WARM PAD", warmPad()},         {"WOOD FLUTE", woodFlute()},   {"NOISE WIND", noiseWind()},
     {"VOWEL PAD", vowelPad()},       {"SYNC LEAD", syncLead()},     {"FOLD BASS", foldBass()},
     {"DIGI KEYS", digiKeys()},       {"DRAWBAR ORGAN", drawbarOrgan()}, {"MORPH PLUCK", morphPluck()},
+    {"SUPERSAW", superSaw()},        {"SAW STAB", sawStab()},       {"REESE BASS", reeseBass()},
+    {"WIDE PLUCK", widePluck()},     {"SAW PAD", sawPad()},         {"PULSE LEAD", pulseLead()},
 };
 const int kPresetCount = sizeof(kPresets) / sizeof(kPresets[0]);
 
@@ -191,6 +240,7 @@ float lfoHz(float n)             { return 0.05f * std::pow(400.0f, n); }   // 0.
 float delaySec(float n)          { return 0.01f * std::pow(100.0f, n); }   // 10 ms .. 1 s
 float delayFeedbackGain(float n) { return n * 0.9f; }
 float pulseWidth(float pos)      { return 0.5f - 0.45f * pos; }            // 50% .. 5%
+float spreadCents(float n)       { return n * 50.0f; }
 
 void Synth::init(int sampleRate) {
     sampleRate_ = static_cast<float>(sampleRate);
@@ -199,6 +249,8 @@ void Synth::init(int sampleRate) {
     delayWrite_  = 0;
     delaySmooth_ = -1.0f;
     silentRun_   = 0;
+    chorusBuf_.assign(static_cast<size_t>(sampleRate_ * 0.03f) + 4, 0.0f);
+    chorusWrite_ = 0;
     wt::build();
 }
 
@@ -229,7 +281,11 @@ void Synth::noteOn(int key, int note, float gain) {
     v.env      = 0.0f;
     const int trig[2] = {params.lfo1Trig, params.lfo2Trig};
     for (int i = 0; i < 2; ++i) v.lfoPhase[i] = trig[i] ? 0.0f : freePhase_[i];
-    if (!was) v.ic1 = v.ic2 = 0.0f;
+    if (!was) {
+        v.ic1 = v.ic2 = v.ir1 = v.ir2 = 0.0f;
+        // Unison oscillators start at scattered phases, or they would sound as one at first.
+        for (int i = 1; i < kMaxUnison; ++i) v.ph[i] = 0.5f + 0.49f * noise();
+    }
 }
 
 void Synth::noteOff(int key) {
@@ -306,7 +362,7 @@ float Synth::lfoValue(Voice& v, int i, int shape, float inc) {
     }
 }
 
-void Synth::render(float* out, int frames) {
+void Synth::render(float* left, float* right, int frames) {
     const Params p  = params;
     const float  sr = sampleRate_;
 
@@ -320,7 +376,6 @@ void Synth::render(float* out, int frames) {
     const float envRel  = decayMul(releaseSec(p.envR), sr, kBlock);
 
     const float baseCutoff = cutoffHz(p.cutoff);
-    const float detuneMul  = std::exp2(detuneCents(p.detune) / 1200.0f);
     const float driveGain  = 1.0f + p.drive * 9.0f;
     const float gain       = 0.3f * p.volume;
     const float lfoInc[2]  = {lfoHz(p.lfo1Rate) * kBlock / sr, lfoHz(p.lfo2Rate) * kBlock / sr};
@@ -328,6 +383,39 @@ void Synth::render(float* out, int frames) {
     const bool  table      = isWavetable(wave);
     const int   tableIndex = wave - int(Wave::WtMorph);
     const auto  filter     = FilterType(p.filter);
+
+    // The oscillator stack: its pitch ratios and where each sits in the stereo field.
+    // UNISON 1 is the main oscillator plus DETUNE's copy; more spreads a stack across SPREAD.
+    const int   uni   = std::clamp(p.unison, 0, kMaxUnison - 1) + 1;
+    const float width = std::clamp(p.width, 0.0f, 1.0f);
+    int   nOsc = 1;
+    float ratio[kMaxUnison] = {1.0f}, gl[kMaxUnison] = {1.0f}, gr[kMaxUnison] = {1.0f};
+    auto  place = [&](int i, float pan, float g) { // balance pan law: the centre keeps full level
+        gl[i] = g * std::min(1.0f, 1.0f - pan);
+        gr[i] = g * std::min(1.0f, 1.0f + pan);
+    };
+    if (uni == 1) {
+        if (p.detune > 0.0f) {
+            nOsc     = 2;
+            ratio[1] = std::exp2(detuneCents(p.detune) / 1200.0f);
+            place(0, -width, 0.5f);
+            place(1, width, 0.5f);
+        }
+    } else {
+        nOsc          = uni;
+        const float g = 1.3f / std::sqrt(float(uni));
+        for (int i = 0; i < uni; ++i) {
+            const float off = -1.0f + 2.0f * float(i) / float(uni - 1);
+            ratio[i]        = std::exp2(off * spreadCents(p.spread) / 1200.0f);
+            place(i, (i % 2 ? -1.0f : 1.0f) * std::fabs(off) * width, g);
+        }
+    }
+    bool stereo = false;
+    float maxRatio = 1.0f;
+    for (int i = 0; i < nOsc; ++i) {
+        stereo   = stereo || gl[i] != gr[i];
+        maxRatio = std::max(maxRatio, ratio[i]);
+    }
 
     const int   delaySize   = static_cast<int>(delayBuf_.size());
     const float delayTarget = std::min(delaySec(p.delayTime) * sr, float(delaySize - 2));
@@ -352,14 +440,21 @@ void Synth::render(float* out, int frames) {
 
     // Idle: no voices and the delay line has held only silence for a full lap.
     if (silentRun_ >= delaySize && activeVoices() == 0) {
-        std::fill(out, out + frames, 0.0f);
+        std::fill(left, left + frames, 0.0f);
+        std::fill(right, right + frames, 0.0f);
         return;
     }
+
+    // Chorus: two taps around 8 ms swinging +-3 ms in quadrature, one per side.
+    const bool  useChorus  = p.chorus > 0.0f;
+    const int   chorusSize = static_cast<int>(chorusBuf_.size());
+    const float chorusInc  = 0.35f / sr;
+    const float chorusBase = 0.008f * sr, chorusDepth = 0.003f * sr;
 
     for (int start = 0; start < frames; start += kBlock) {
         const int n = std::min(kBlock, frames - start);
 
-        float mix[kBlock] = {};
+        float mixL[kBlock] = {}, mixR[kBlock] = {};
         for (Voice& v : voices_) {
             if (v.ampStage == Idle) continue;
 
@@ -387,7 +482,8 @@ void Synth::render(float* out, int frames) {
 
             const float freq = midiHz(v.note + p.transpose + mod[int(ModDest::Pitch)] * kModPitchSemis);
             const float dt1  = std::min(freq / sr, 0.49f);
-            const float dt2  = std::min(dt1 * detuneMul, 0.49f);
+            float       dto[kMaxUnison];
+            for (int o = 0; o < nOsc; ++o) dto[o] = std::min(dt1 * ratio[o], 0.49f);
             const float dtS  = dt1 * 0.5f;
             const float pos  = std::clamp(p.pos + mod[int(ModDest::Pos)], 0.0f, 1.0f);
             const float pw   = pulseWidth(pos);
@@ -398,7 +494,7 @@ void Synth::render(float* out, int frames) {
             const float* fb = nullptr;
             float        ff = 0.0f;
             if (table) {
-                int   mip = wt::mipFor(freq * (p.detune > 0.0f ? detuneMul : 1.0f), sr);
+                int   mip = wt::mipFor(freq * maxRatio, sr);
                 float fp  = pos * (wt::kFrames - 1);
                 int   f0  = std::min(int(fp), wt::kFrames - 2);
                 ff        = fp - f0;
@@ -422,6 +518,14 @@ void Synth::render(float* out, int frames) {
             const float a1  = 1.0f / (1.0f + g * (g + k));
             const float a2  = g * a1;
             const float a3  = g * a2;
+            auto svf = [&](float x, float& ic1, float& ic2) {
+                const float v3 = x - ic2;
+                const float v1 = a1 * ic1 + a2 * v3;
+                const float v2 = ic2 + a2 * ic1 + a3 * v3;
+                ic1 = 2.0f * v1 - ic1;
+                ic2 = 2.0f * v2 - ic2;
+                return filter == FilterType::LowPass ? v2 : filter == FilterType::BandPass ? v1 : x - k * v1 - v2;
+            };
 
             for (int i = 0; i < n; ++i) {
                 // Amp envelope.
@@ -440,65 +544,83 @@ void Synth::render(float* out, int frames) {
                         v.ampStage = Idle;
                         v.envStage = Idle;
                         v.key      = -1;
-                        v.ic1 = v.ic2 = 0.0f;
+                        v.ic1 = v.ic2 = v.ir1 = v.ir2 = 0.0f;
                         break;
                     }
                 }
 
                 // Oscillators.
-                float s;
-                if (table) {
-                    s = readTable(v.phase1);
-                    if (p.detune > 0.0f) s = 0.5f * (s + readTable(v.phase2));
-                } else {
-                    s = classic(wave, v.phase1, dt1, pw);
-                    if (p.detune > 0.0f) s = 0.5f * (s + classic(wave, v.phase2, dt2, pw));
+                float sL = 0.0f, sR = 0.0f;
+                for (int o = 0; o < nOsc; ++o) {
+                    const float s = table ? readTable(v.ph[o]) : classic(wave, v.ph[o], dto[o], pw);
+                    sL += s * gl[o];
+                    sR += s * gr[o];
+                    v.ph[o] = wrap01(v.ph[o] + dto[o]);
                 }
-                v.phase1 = wrap01(v.phase1 + dt1);
-                v.phase2 = wrap01(v.phase2 + dt2);
+                float centre = 0.0f;
                 if (p.sub > 0.0f) {
                     float sq = (v.phaseSub < 0.5f ? 1.0f : -1.0f) + polyBlep(v.phaseSub, dtS) -
                                polyBlep(wrap01(v.phaseSub + 0.5f), dtS);
-                    s += sq * p.sub * 0.7f;
+                    centre += sq * p.sub * 0.7f;
                 }
                 v.phaseSub = wrap01(v.phaseSub + dtS);
-                if (p.noise > 0.0f) s += noise() * p.noise;
-                if (p.drive > 0.0f) s = softClip(s * driveGain);
+                if (p.noise > 0.0f) centre += noise() * p.noise;
+                sL += centre;
+                if (p.drive > 0.0f) sL = softClip(sL * driveGain);
 
-                // Filter.
-                float y = s;
-                if (filter != FilterType::Off) {
-                    const float v3 = s - v.ic2;
-                    const float v1 = a1 * v.ic1 + a2 * v3;
-                    const float v2 = v.ic2 + a2 * v.ic1 + a3 * v3;
-                    v.ic1 = 2.0f * v1 - v.ic1;
-                    v.ic2 = 2.0f * v2 - v.ic2;
-                    y = filter == FilterType::LowPass ? v2 : filter == FilterType::BandPass ? v1 : s - k * v1 - v2;
+                // Filter: one for a mono stack, one per side for a stereo one.
+                const float amp = v.amp * ampM;
+                float       yL  = filter != FilterType::Off ? svf(sL, v.ic1, v.ic2) : sL;
+                mixL[i] += yL * amp;
+                if (!stereo) {
+                    mixR[i] += yL * amp;
+                    continue;
                 }
-                mix[i] += y * v.amp * ampM;
+                sR += centre;
+                if (p.drive > 0.0f) sR = softClip(sR * driveGain);
+                mixR[i] += (filter != FilterType::Off ? svf(sR, v.ir1, v.ir2) : sR) * amp;
             }
         }
 
-        if (!useDelay) {
-            for (int i = 0; i < n; ++i) out[start + i] = softClip(mix[i] * gain);
-            continue;
-        }
         for (int i = 0; i < n; ++i) {
-            const float dry = mix[i] * gain;
+            float l = mixL[i] * gain, r = mixR[i] * gain;
 
-            // Feedback delay; the length glides so turning DELAY TIME bends pitch like tape.
-            delaySmooth_ += (delayTarget - delaySmooth_) * 0.0005f;
-            float rp = float(delayWrite_) - delaySmooth_;
-            if (rp < 0.0f) rp += float(delaySize);
-            const int   i0   = static_cast<int>(rp);
-            const int   i1   = i0 + 1 == delaySize ? 0 : i0 + 1;
-            const float frac = rp - float(i0);
-            const float wet  = delayBuf_[i0] + (delayBuf_[i1] - delayBuf_[i0]) * frac;
-            delayBuf_[delayWrite_] = dry + wet * feedback;
-            silentRun_ = std::fabs(delayBuf_[delayWrite_]) > 1e-5f ? 0 : silentRun_ + 1;
-            if (++delayWrite_ == delaySize) delayWrite_ = 0;
+            if (useDelay) {
+                // Feedback delay; the length glides so turning DELAY TIME bends pitch like tape.
+                delaySmooth_ += (delayTarget - delaySmooth_) * 0.0005f;
+                float rp = float(delayWrite_) - delaySmooth_;
+                if (rp < 0.0f) rp += float(delaySize);
+                const int   i0   = static_cast<int>(rp);
+                const int   i1   = i0 + 1 == delaySize ? 0 : i0 + 1;
+                const float frac = rp - float(i0);
+                const float wet  = delayBuf_[i0] + (delayBuf_[i1] - delayBuf_[i0]) * frac;
+                delayBuf_[delayWrite_] = 0.5f * (l + r) + wet * feedback;
+                silentRun_ = std::fabs(delayBuf_[delayWrite_]) > 1e-5f ? 0 : silentRun_ + 1;
+                if (++delayWrite_ == delaySize) delayWrite_ = 0;
+                l += wet * p.delayMix;
+                r += wet * p.delayMix;
+            }
 
-            out[start + i] = softClip(dry + wet * p.delayMix); // gentle limiter for chords / resonance
+            if (useChorus) {
+                chorusBuf_[chorusWrite_] = 0.5f * (l + r);
+                chorusPhase_ += chorusInc;
+                if (chorusPhase_ >= 1.0f) chorusPhase_ -= 1.0f;
+                auto tap = [&](float ph) {
+                    float rp = float(chorusWrite_) - (chorusBase + chorusDepth * fastSin(ph));
+                    if (rp < 0.0f) rp += float(chorusSize);
+                    const int   i0   = static_cast<int>(rp);
+                    const int   i1   = i0 + 1 == chorusSize ? 0 : i0 + 1;
+                    const float frac = rp - float(i0);
+                    return chorusBuf_[i0] + (chorusBuf_[i1] - chorusBuf_[i0]) * frac;
+                };
+                const float cl = tap(chorusPhase_), cr = tap(wrap01(chorusPhase_ + 0.25f));
+                if (++chorusWrite_ == chorusSize) chorusWrite_ = 0;
+                l += (cl - 0.3f * cr) * p.chorus;
+                r += (cr - 0.3f * cl) * p.chorus;
+            }
+
+            left[start + i]  = softClip(l); // gentle limiter for chords / resonance
+            right[start + i] = softClip(r);
         }
     }
 }

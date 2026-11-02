@@ -18,7 +18,7 @@ public:
     virtual void setPitch(int key, int note) = 0;
     virtual void kill(int key)               = 0;
 
-    // Writes (not adds) `frames` mono samples.
-    virtual void render(float* out, int frames) = 0;
+    // Writes (not adds) `frames` samples to each of the left and right channels.
+    virtual void render(float* left, float* right, int frames) = 0;
     virtual int  activeVoices() const           = 0;
 };
