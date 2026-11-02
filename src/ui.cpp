@@ -9,11 +9,12 @@
 
 const ScreenOps& screenOps(Screen s) {
     switch (s) {
+    case SCR_SEQ:     return kSeqScreen;
     case SCR_PATTERN: return kPatternScreen;
     case SCR_INSTR:   return kInstrScreen;
     case SCR_MODS:    return kModsScreen;
     case SCR_MIXER:   return kMixerScreen;
-    default:          return kSeqScreen;
+    default:          return kSessionScreen;
     }
 }
 
@@ -85,8 +86,8 @@ void drawChrome(App& a) {
         drawText(r, x, sd.y, 2, sd.name, on ? kBg : kDim);
     }
     std::string tn = fmt("T%d %s", a.track + 1, trackName(a, a.track).c_str());
-    if (tn.size() > 15) tn.resize(15);
-    drawText(r, 470, 15, 3, tn, kText);
+    if (tn.size() > 13) tn.resize(13);
+    drawText(r, x + 76, 19, 2, tn, kText);
 
     Uint32 now = SDL_GetTicks();
     if (SDL_TICKS_PASSED(now, a.peakResetAt)) {

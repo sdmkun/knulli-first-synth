@@ -76,17 +76,17 @@ void navigate(App& a, Btn b) {
     switch (b) {
     case BTN_LEFT:
     case BTN_RIGHT:
-        if (a.screen == SCR_MODS || a.screen == SCR_MIXER) break; // they only lead back to INSTR / SEQ
+        if (a.screen == SCR_MODS || a.screen == SCR_MIXER) break; // they only lead back to INSTR / SESSION
         a.screen  = Screen(std::clamp(int(a.screen) + (b == BTN_LEFT ? -1 : 1), 0, kMainScreens - 1));
         a.genOpen = false;
         break;
     case BTN_UP:
         if (a.screen == SCR_INSTR) a.screen = SCR_MODS, a.genOpen = false;
-        else if (a.screen == SCR_MIXER) a.screen = SCR_SEQ, a.genOpen = false;
+        else if (a.screen == SCR_MIXER) a.screen = SCR_SESSION, a.genOpen = false;
         break;
     case BTN_DOWN:
         if (a.screen == SCR_MODS) a.screen = SCR_INSTR, a.genOpen = false;
-        else if (a.screen == SCR_SEQ) a.screen = SCR_MIXER, a.genOpen = false;
+        else if (a.screen == SCR_SESSION) a.screen = SCR_MIXER, a.genOpen = false;
         break;
     default: break;
     }
@@ -119,6 +119,10 @@ void onSelectCombo(App& a, Btn b) {
         a.message = fmt("T%d: CLEARED  (SEL+B: UNDO)", a.track + 1);
         break;
     }
+    case BTN_A:
+        if (keepClip(a, a.track) >= 0) saveProject(a, true);
+        a.aScreen = SCR_COUNT; // the held A edits nothing
+        break;
     case BTN_START: a.quit = true; break;
     default: break;
     }
@@ -486,14 +490,22 @@ int main(int argc, char* argv[]) {
         loadPreset(a, t, a.preset[t]);
         loadKit(a, t, 0);
     }
-    setTrackType(a, kTracks - 1, true); // the last track starts as drums when a kit is available
-    makeDefaultSong(a);
+    // The project lives next to the binary (on the device: roms/ports/knulli-first-synth/projects/).
+    {
+        char* base   = SDL_GetBasePath();
+        a.projectPath = std::string(base ? base : "") + "projects/current.json";
+        SDL_free(base);
+    }
+    if (!loadProject(a)) {
+        setTrackType(a, kTracks - 1, true); // the last track starts as drums when a kit is available
+        makeDefaultSong(a);
+    }
     {
         AudioLock lock(a.audio);
         a.seq.loopUser = &a;
         a.seq.onLoop   = [](void* user, int t) { evolveOnLoop(*static_cast<App*>(user), t); };
     }
-    a.message = "START: PLAY   X: GENERATE   Y+PAD: SCREENS";
+    if (a.message.empty()) a.message = "START: PLAY   X: GENERATE   SEL+A: KEEP   Y+PAD: SCREENS";
     if (a.audio) SDL_PauseAudioDevice(a.audio, 0);
 
     while (!a.quit) {
@@ -504,10 +516,12 @@ int main(int argc, char* argv[]) {
         releasePreview(a);
         a.page = std::min(a.page, pageCount(a) - 1);
         draw(a);
+        autosave(a);
         Uint32 elapsed = SDL_GetTicks() - frameStart;
         if (elapsed < 16) SDL_Delay(16 - elapsed); // in case vsync is unavailable
     }
 
+    saveProject(a);
     if (a.audio) SDL_CloseAudioDevice(a.audio);
     SDL_DestroyRenderer(a.renderer);
     SDL_DestroyWindow(a.window);

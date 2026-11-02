@@ -19,11 +19,12 @@ $dist = Join-Path $root 'dist\ports'
 $app = Join-Path $dist 'knulli-first-synth'
 New-Item -ItemType Directory -Force $app | Out-Null
 Copy-Item (Join-Path $root 'build\knulli\ksynth') $app -Force
-# Bundled drum kits; your own kits can be added next to them on the device.
-Copy-Item (Join-Path $root 'samples') $app -Recurse -Force
-# Grooves (.agr) are not in git; put them in grooves\ at the repo root to ship them.
-$grooves = Join-Path $root 'grooves'
-if (Test-Path $grooves) { Copy-Item $grooves $app -Recurse -Force }
+# Samples and grooves are not shipped: they live on the device (roms/ports/knulli-first-synth/samples
+# and grooves) and are managed by hand, so a copy of dist never overwrites them. Old builds put them here.
+foreach ($d in 'samples', 'grooves') {
+    $old = Join-Path $app $d
+    if (Test-Path $old) { Remove-Item $old -Recurse -Force }
+}
 Copy-Item (Join-Path $root 'package\KnulliFirstSynth.sh') $dist -Force
 Copy-Item (Join-Path $root 'package\KnulliFirstSynth.sh.keys') $dist -Force
 

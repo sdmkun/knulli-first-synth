@@ -133,6 +133,7 @@ bool setPadSample(App& a, int t, int pad, const std::string& path) {
     }
     a.ownKit[t].pads[pad] = std::move(smp);
     a.drums[t].setKit(&a.ownKit[t]);
+    a.padPath[t][pad] = path;
     return true;
 }
 
@@ -185,6 +186,7 @@ void loadKit(App& a, int t, int index) {
     a.kit[t] = (index % n + n) % n;
     AudioLock lock(a.audio);
     a.usesOwnKit[t] = false; // picking a kit drops the track's own pad samples
+    for (std::string& p : a.padPath[t]) p.clear();
     a.drums[t].setKit(&a.kits[a.kit[t]]);
 }
 
@@ -324,4 +326,43 @@ void mutateTrack(App& a) {
     pushUndo(a, a.track);
     mutate(a, a.track, SDL_GetTicks() * 2654435761u + uint32_t(a.track), 0.5f);
     a.message = fmt("T%d: MUTATED  (SEL+B: UNDO)", a.track + 1);
+}
+
+// ---------------------------------------------------------------- clip bank
+
+int keepClip(App& a, int t, int slot) {
+    if (slot < 0)
+        for (int s = 0; s < kSlots && slot < 0; ++s)
+            if (!a.clips[t][s].used) slot = s;
+    if (slot < 0 || slot >= kSlots) {
+        a.message = fmt("T%d: NO FREE SLOT  (B+A ON A CLIP DELETES IT)", t + 1);
+        return -1;
+    }
+    Clip& c = a.clips[t][slot];
+    {
+        AudioLock lock(a.audio);
+        c.pat         = a.seq.patterns[t];
+        a.seq.slot[t] = slot; // the live pattern now is this clip
+    }
+    c.used    = true;
+    c.drum    = a.isDrum[t];
+    a.message = fmt("T%d: KEPT IN SLOT %d", t + 1, slot + 1);
+    return slot;
+}
+
+void launchClip(App& a, int t, int slot) {
+    const Clip& c = a.clips[t][slot];
+    if (!c.used) return;
+    if (c.drum != a.isDrum[t]) {
+        a.message = fmt("T%d: THIS CLIP IS FOR A %s TRACK", t + 1, c.drum ? "DRUM" : "SYNTH");
+        return;
+    }
+    AudioLock lock(a.audio);
+    pushUndo(a, t); // the live pattern it replaces can come back with SEL+B
+    a.seq.queue(t, c.pat, slot);
+}
+
+bool clipMatchesLive(App& a, int t, int slot) {
+    if (slot < 0 || slot >= kSlots || !a.clips[t][slot].used) return false;
+    return std::memcmp(&a.clips[t][slot].pat, &a.seq.patterns[t], sizeof(Pattern)) == 0;
 }

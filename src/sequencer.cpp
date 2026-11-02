@@ -139,6 +139,18 @@ void Sequencer::setLength(int track, int steps) {
     patterns[track].length = std::clamp(steps, 1, Pattern::kMaxSteps);
 }
 
+void Sequencer::queue(int track, const Pattern& p, int slotIndex) {
+    if (!playing_) {
+        patterns[track] = p;
+        slot[track]     = slotIndex;
+        queued_[track]  = false;
+        return;
+    }
+    queuedPat_[track]  = p;
+    queuedSlot_[track] = slotIndex;
+    queued_[track]     = true;
+}
+
 void Sequencer::start() {
     playing_ = true;
     std::fill(std::begin(step_), std::end(step_), -1);
@@ -240,6 +252,13 @@ void Sequencer::fireTick(Instrument* const* inst) {
     const int tickInStep = int(tick_ % kTicksPerStep);
     for (int t = 0; t < kTracks; ++t) {
         Instrument& track = *inst[t];
+        if (tickInStep == 0 && queued_[t] && songStep() % std::max(1, launchQuant) == 0) {
+            releaseTrack(track, t);
+            patterns[t] = queuedPat_[t];
+            slot[t]     = queuedSlot_[t];
+            queued_[t]  = false;
+            step_[t]    = -1; // the new pattern starts from its first step
+        }
         if (tickInStep == 0) {
             const bool first = step_[t] < 0;
             step_[t]         = (step_[t] + 1) % patterns[t].length;

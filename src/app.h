@@ -26,15 +26,24 @@ enum Btn {
 };
 extern const char* kBtnNames[BTN_COUNT];
 
-// Screens sit side by side like the M8's; SELECT + left / right moves between them.
-// MODS (envelopes and LFOs) sits above INSTR: SELECT + up / down.
-// MIXER (track volumes and EVOLVE) sits below SEQ: SELECT + down / up.
-enum Screen { SCR_SEQ, SCR_PATTERN, SCR_INSTR, SCR_MODS, SCR_MIXER, SCR_COUNT };
+// Screens sit side by side like the M8's; Y (or SELECT) + left / right moves between them.
+// SESSION (the clip bank) is home. MODS (envelopes and LFOs) sits above INSTR,
+// MIXER (track volumes and EVOLVE) below SESSION: Y + up / down.
+enum Screen { SCR_SESSION, SCR_SEQ, SCR_PATTERN, SCR_INSTR, SCR_MODS, SCR_MIXER, SCR_COUNT };
 constexpr int kMainScreens = SCR_MODS; // the row SELECT + left / right walks
 
 constexpr int kTracks    = Sequencer::kTracks;
 constexpr int kPageSteps = 16; // steps shown at once; longer patterns are paged with L2 / R2
 constexpr int kSynthCols = 4;  // note columns shown per step on a synth track
+constexpr int kSlots     = 8;  // clip slots per track (rows of the SESSION screen)
+
+// A pattern kept in the clip bank. Drum and synth notes mean different things,
+// so a clip only goes back onto a track of the same type.
+struct Clip {
+    bool    used = false;
+    bool    drum = false;
+    Pattern pat;
+};
 
 struct Scale {
     const char* name;
@@ -149,11 +158,23 @@ struct App {
 
     Popup popup;
 
+    // The clip bank: what SESSION shows below the live patterns. Only the UI thread touches it.
+    Clip clips[kTracks][kSlots];
+
+    // Where pad samples that replaced a kit's came from (to save and reload them).
+    std::string padPath[kTracks][Kit::kPads];
+
+    // The project file: written when the bank changes, every few seconds when
+    // anything else did, and on quit; read at startup.
+    std::string projectPath;
+    std::string savedText; // what the file holds now
+    Uint32      saveCheckAt = 0;
+
     // One undo level per track; undo swaps, so pressing it again redoes.
     Pattern undo[kTracks];
     bool    hasUndo[kTracks] = {};
 
-    Screen screen = SCR_SEQ;
+    Screen screen = SCR_SESSION;
     int    track  = 0;
     int    page   = 0;
     int    scale  = 1; // MINOR
@@ -162,6 +183,7 @@ struct App {
     int    lastVel[kTracks]  = {kDefaultVel, kDefaultVel, kDefaultVel, kDefaultVel}; // and how hard
     StepFx lastFx[kTracks]   = {{Fx::Ret, 3}, {Fx::Ret, 3}, {Fx::Ret, 3}, {Fx::Ret, 3}}; // what A puts in an empty FX
 
+    Cursor sessCur{0, 0}; // row 0 = the live patterns, 1..kSlots = clip slots; col -1 = scene buttons
     Cursor seqCur{0, 0};  // row -1 = BPM / KEY / SCALE fields
     Cursor synthCur;      // cols: 4 per note column (NOTE, VEL, FX command, FX value)
     Cursor drumCur{0, 0}; // col -1 = row label (Euclid), 0..15 = steps
@@ -218,6 +240,13 @@ void        mutate(App& a, int t, uint32_t seed, float amount); // locked
 void        evolveOnLoop(App& a, int t);      // audio thread (the device lock is held there)
 void        newSeed(App& a);                  // current track: new seed, regenerate (with undo and a message)
 void        mutateTrack(App& a);              // current track: mutate (with undo and a message)
+int         keepClip(App& a, int t, int slot = -1); // saves track t's pattern to `slot` (-1: first free); returns it or -1
+void        launchClip(App& a, int t, int slot);    // queues a clip to play from the next bar
+bool        clipMatchesLive(App& a, int t, int slot); // locked
+// Project file (project.cpp)
+bool        saveProject(App& a, bool force = false); // false when nothing changed or writing failed
+bool        loadProject(App& a);
+void        autosave(App& a);                 // call every frame; saves when something changed
 float       synthParamNorm(const Params& p, int id); // bar position 0..1; bipolar amounts sit at 0.5 when 0
 bool        synthParamBipolar(int id);
 std::string synthParamText(const Params& p, int id);
@@ -235,7 +264,7 @@ struct ScreenOps {
     void (*option)(App&, int fine, int coarse); // B held + D-pad; may be null
     const char* hints;
 };
-extern const ScreenOps kSeqScreen, kPatternScreen, kInstrScreen, kModsScreen, kMixerScreen;
+extern const ScreenOps kSessionScreen, kSeqScreen, kPatternScreen, kInstrScreen, kModsScreen, kMixerScreen;
 const ScreenOps& screenOps(Screen s);
 
 // List popup (ui_popup.cpp)

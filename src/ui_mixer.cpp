@@ -1,5 +1,5 @@
 // MIXER: the four tracks' volumes with level meters, and each track's EVOLVE
-// settings (keep mutating while it plays). Reached from SEQ with SELECT + down.
+// settings (keep mutating while it plays). Reached from SESSION with Y + down.
 
 #include <algorithm>
 #include <cmath>
@@ -192,5 +192,5 @@ void clear(App& a) {
 
 const ScreenOps kMixerScreen = {
     "MIXER", draw, move, edit, enter, clear, nullptr,
-    "A+PAD:EDIT  B+A:RESET  L3/R3:MUTE/SOLO  Y+UP:SEQ",
+    "A+PAD:EDIT  B+A:RESET  L3/R3:MUTE/SOLO  Y+UP:SESSION",
 };

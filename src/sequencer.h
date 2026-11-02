@@ -123,6 +123,16 @@ public:
     void* loopUser = nullptr;
     int   loops(int track) const { return loops_[track]; } // wraps since start
 
+    // Clip launching: `p` replaces the track's pattern on the next multiple of
+    // launchQuant steps (counted from the song start), from its first step.
+    // Stopped, it replaces it right away. `slot` is only remembered for the UI.
+    void queue(int track, const Pattern& p, int slot);
+    void cancelQueue(int track) { queued_[track] = false; }
+    int  queuedSlot(int track) const { return queued_[track] ? queuedSlot_[track] : -1; }
+    int  launchQuant = 16;
+    int  slot[kTracks] = {-1, -1, -1, -1}; // where the playing pattern came from, -1 = nowhere
+    long songStep() const { return tick_ < 0 ? 0 : tick_ / kTicksPerStep; } // steps since start
+
 private:
     // What one column of one track is doing between ticks.
     struct Column {
@@ -161,6 +171,10 @@ private:
 
     int step_[kTracks]; // step fired most recently, per track
     int loops_[kTracks] = {};
+
+    Pattern queuedPat_[kTracks];
+    bool    queued_[kTracks]     = {};
+    int     queuedSlot_[kTracks] = {};
 
     Column cols_[kTracks][SeqStep::kMaxNotes];
     int    nextKey_[kTracks] = {};
