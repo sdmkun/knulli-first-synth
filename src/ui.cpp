@@ -12,6 +12,7 @@ const ScreenOps& screenOps(Screen s) {
     case SCR_PATTERN: return kPatternScreen;
     case SCR_INSTR:   return kInstrScreen;
     case SCR_MODS:    return kModsScreen;
+    case SCR_MIXER:   return kMixerScreen;
     default:          return kSeqScreen;
     }
 }
@@ -76,11 +77,13 @@ void drawChrome(App& a) {
         drawText(r, x, 15, 3, name, s == a.screen ? kBg : kDim);
         x += w + 26;
     }
-    // MODS hangs above INSTR, so it is drawn small and raised.
-    bool mods = a.screen == SCR_MODS;
-    if (mods) fillRect(r, x - 6, 4, textWidth("MODS", 2) + 12, 22, kAccent);
-    drawText(r, x, 8, 2, "MODS", mods ? kBg : kDim);
-    drawText(r, x, 30, 2, "SEL+UP", kLine);
+    // MODS hangs above INSTR and MIXER below SEQ, so they are drawn small, one above the other.
+    const struct { Screen s; const char* name; int y; } side[] = {{SCR_MODS, "MODS", 8}, {SCR_MIXER, "MIXER", 30}};
+    for (const auto& sd : side) {
+        bool on = a.screen == sd.s;
+        if (on) fillRect(r, x - 6, sd.y - 4, textWidth(sd.name, 2) + 12, 22, kAccent);
+        drawText(r, x, sd.y, 2, sd.name, on ? kBg : kDim);
+    }
     std::string tn = fmt("T%d %s", a.track + 1, trackName(a, a.track).c_str());
     if (tn.size() > 15) tn.resize(15);
     drawText(r, 470, 15, 3, tn, kText);

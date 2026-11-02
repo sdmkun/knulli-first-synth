@@ -74,15 +74,17 @@ void onSelectCombo(App& a, Btn b) {
     switch (b) {
     case BTN_LEFT:
     case BTN_RIGHT:
-        if (a.screen == SCR_MODS) break; // MODS only leads back down to INSTR
+        if (a.screen == SCR_MODS || a.screen == SCR_MIXER) break; // they only lead back to INSTR / SEQ
         a.screen  = Screen(std::clamp(int(a.screen) + (b == BTN_LEFT ? -1 : 1), 0, kMainScreens - 1));
         a.genOpen = false;
         break;
     case BTN_UP:
         if (a.screen == SCR_INSTR) a.screen = SCR_MODS, a.genOpen = false;
+        else if (a.screen == SCR_MIXER) a.screen = SCR_SEQ, a.genOpen = false;
         break;
     case BTN_DOWN:
         if (a.screen == SCR_MODS) a.screen = SCR_INSTR, a.genOpen = false;
+        else if (a.screen == SCR_SEQ) a.screen = SCR_MIXER, a.genOpen = false;
         break;
     case BTN_B: {
         AudioLock lock(a.audio);
@@ -447,6 +449,11 @@ int main(int argc, char* argv[]) {
     }
     setTrackType(a, kTracks - 1, true); // the last track starts as drums when a kit is available
     makeDefaultSong(a);
+    {
+        AudioLock lock(a.audio);
+        a.seq.loopUser = &a;
+        a.seq.onLoop   = [](void* user, int t) { evolveOnLoop(*static_cast<App*>(user), t); };
+    }
     a.message = "START: PLAY   X: GENERATE   SEL+LEFT/RIGHT: SCREENS";
     if (a.audio) SDL_PauseAudioDevice(a.audio, 0);
 

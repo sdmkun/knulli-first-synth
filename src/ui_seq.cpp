@@ -8,7 +8,7 @@
 
 namespace {
 
-enum { F_BPM, F_KEY, F_SCALE, F_COUNT };
+enum { F_BPM, F_KEY, F_SCALE, F_SWING, F_COUNT };
 
 constexpr int kGridX  = 76;
 constexpr int kColW   = 236;
@@ -50,10 +50,10 @@ void draw(App& a) {
 
     // Song-wide fields.
     const std::string values[F_COUNT] = {fmt("%d", int(a.seq.bpm() + 0.5f)), kNoteNames[a.root],
-                                         kScales[a.scale].name};
-    const char*       labels[F_COUNT] = {"BPM", "KEY", "SCALE"};
-    const int         fx[F_COUNT]     = {24, 220, 400};
-    for (int f = 0; f < F_COUNT; ++f) drawField(r, fx[f], 70, labels[f], values[f], c.row < 0 && c.col == f, fx[f] + 64);
+                                         kScales[a.scale].name, fmt("%d%%", int(a.seq.swing() * 100.0f + 0.5f))};
+    const char*       labels[F_COUNT] = {"BPM", "KEY", "SCALE", "SWING"};
+    const int         fx[F_COUNT]     = {24, 220, 400, 640};
+    for (int f = 0; f < F_COUNT; ++f) drawField(r, fx[f], 70, labels[f], values[f], c.row < 0 && c.col == f, fx[f] + 76);
 
     // Track titles.
     for (int t = 0; t < kTracks; ++t) {
@@ -67,6 +67,7 @@ void draw(App& a) {
         drawText(r, x + 6, kTitleY + 26, 2, fmt("%s LEN %d", a.isDrum[t] ? "DRUM" : "SYNTH", pats[t].length), kDim);
         if (a.seq.solo == t) drawTextRight(r, x + kColW - 12, kTitleY + 26, 2, "SOLO", kAccent);
         else if (a.seq.mute[t]) drawTextRight(r, x + kColW - 12, kTitleY + 26, 2, "MUTE", kRecCol);
+        else if (kEvolveEvery[a.evolve[t].every]) drawTextRight(r, x + kColW - 12, kTitleY + 26, 2, "EVO", kPlayCol);
     }
 
     // Grid: the visible page of every track.
@@ -111,6 +112,7 @@ void edit(App& a, int fine, int coarse) {
     case F_BPM:   a.seq.setBpm(a.seq.bpm() + fine + coarse * 10); break;
     case F_KEY:   a.root = (a.root + fine + coarse + 12) % 12; break;
     case F_SCALE: a.scale = (a.scale + fine + coarse + kScaleCount) % kScaleCount; break;
+    case F_SWING: a.seq.setSwing(a.seq.swing() + fine * 0.01f + coarse * 0.05f); break;
     }
 }
 
@@ -127,7 +129,11 @@ void enter(App& a) {
 
 void clear(App& a) {
     const Cursor& c = a.seqCur;
-    if (c.row < 0) return;
+    if (c.row < 0) {
+        AudioLock lock(a.audio);
+        if (c.col == F_SWING) a.seq.setSwing(0.5f);
+        return;
+    }
     int step = a.page * kPageSteps + c.row;
     AudioLock lock(a.audio);
     if (step >= a.seq.patterns[c.col].length) return;
@@ -139,5 +145,5 @@ void clear(App& a) {
 
 const ScreenOps kSeqScreen = {
     "SEQ", draw, move, edit, enter, clear, nullptr,
-    "A:OPEN STEP  A+PAD:EDIT  B+A:CLEAR  X:GENERATE  Y:MUTATE  L3/R3:MUTE/SOLO",
+    "A:OPEN STEP  A+PAD:EDIT  B+A:CLEAR  X:GEN  Y:MUTATE  L3/R3:MUTE/SOLO  SEL+DN:MIXER",
 };

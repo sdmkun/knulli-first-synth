@@ -109,9 +109,17 @@ void Sequencer::init(int sampleRate) {
     std::fill(std::begin(step_), std::end(step_), -1);
 }
 
-double Sequencer::samplesPerTick() const { return sampleRate_ * 60.0 / bpm_ / 4.0 / kTicksPerStep; }
+// The tick just fired decides: ticks of an even step stretch by 2 * swing, those
+// of an odd step shrink by the same amount, so each pair of steps keeps its length.
+double Sequencer::samplesPerTick() const {
+    const double straight = sampleRate_ * 60.0 / bpm_ / 4.0 / kTicksPerStep;
+    const bool   odd      = tick_ >= 0 && (tick_ / kTicksPerStep) % 2 == 1;
+    return straight * 2.0 * (odd ? 1.0 - swing_ : swing_);
+}
 
 void Sequencer::setBpm(float bpm) { bpm_ = std::clamp(bpm, 40.0f, 240.0f); }
+
+void Sequencer::setSwing(float s) { swing_ = std::clamp(s, 0.5f, 0.75f); }
 
 void Sequencer::setLength(int track, int steps) {
     patterns[track].length = std::clamp(steps, 1, Pattern::kMaxSteps);
@@ -120,6 +128,7 @@ void Sequencer::setLength(int track, int steps) {
 void Sequencer::start() {
     playing_ = true;
     std::fill(std::begin(step_), std::end(step_), -1);
+    std::fill(std::begin(loops_), std::end(loops_), 0);
     tick_      = -1;
     untilTick_ = 0.0; // fire step 0 on the next sample
 }
@@ -199,10 +208,15 @@ void Sequencer::fireTick(Instrument* const* inst) {
     for (int t = 0; t < kTracks; ++t) {
         Instrument& track = *inst[t];
         if (tickInStep == 0) {
-            step_[t] = (step_[t] + 1) % patterns[t].length;
+            const bool first = step_[t] < 0;
+            step_[t]         = (step_[t] + 1) % patterns[t].length;
             if (!audible(t)) {
                 releaseTrack(track, t);
                 continue;
+            }
+            if (step_[t] == 0 && !first) {
+                ++loops_[t];
+                if (onLoop) onLoop(loopUser, t);
             }
             startStep(t);
         }
@@ -248,7 +262,14 @@ void Sequencer::process(Instrument* const* inst, float* out, int frames) {
         std::fill(o, o + n, 0.0f);
         for (int t = 0; t < kTracks; ++t) {
             inst[t]->render(trackBuf_.data(), n);
-            for (int i = 0; i < n; ++i) o[i] += trackBuf_[i];
+            const float g    = volume[t];
+            float       peak = level[t];
+            for (int i = 0; i < n; ++i) {
+                const float v = trackBuf_[i] * g;
+                o[i] += v;
+                peak = std::max(peak, std::fabs(v));
+            }
+            level[t] = peak;
         }
         for (int i = 0; i < n; ++i) o[i] = softClip(o[i] * 0.8f);
 

@@ -84,12 +84,27 @@ public:
     float bpm() const { return bpm_; }
     void  setLength(int track, int steps);
 
+    // Swing: 0.5 = straight. Every other step (counted from the song start) is
+    // pushed later; 0.67 is a triplet shuffle, 0.75 the most this allows.
+    void  setSwing(float s);
+    float swing() const { return swing_; }
+
     // Muted tracks release their notes and stop firing. A solo track mutes all the others.
     bool audible(int track) const { return solo >= 0 ? track == solo : !mute[track]; }
 
     Pattern patterns[kTracks];
     bool    mute[kTracks] = {};
     int     solo          = -1;
+    float   volume[kTracks] = {1.0f, 1.0f, 1.0f, 1.0f}; // track gain, 0..kMaxVolume
+    float   level[kTracks]  = {};  // peak output per track since the UI last cleared it
+    static constexpr float kMaxVolume = 1.5f;
+
+    // Called on the audio thread when an audible track wraps back to its first
+    // step (not on the very first step after start), before that step fires.
+    // Whatever it changes in the pattern plays from this loop on.
+    void (*onLoop)(void* user, int track) = nullptr;
+    void* loopUser = nullptr;
+    int   loops(int track) const { return loops_[track]; } // wraps since start
 
 private:
     // What one column of one track is doing between ticks.
@@ -117,12 +132,14 @@ private:
 
     int    sampleRate_ = 48000;
     float  bpm_        = 120.0f;
+    float  swing_      = 0.5f;
     bool   playing_    = false;
     double untilTick_  = 0.0; // samples until the next tick fires
     long   tick_       = -1;  // ticks fired since start
     uint32_t rng_      = 0x9E3779B9u;
 
     int step_[kTracks]; // step fired most recently, per track
+    int loops_[kTracks] = {};
 
     Column cols_[kTracks][SeqStep::kMaxNotes];
     int    nextKey_[kTracks] = {};

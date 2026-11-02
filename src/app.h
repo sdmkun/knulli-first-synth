@@ -26,7 +26,8 @@ extern const char* kBtnNames[BTN_COUNT];
 
 // Screens sit side by side like the M8's; SELECT + left / right moves between them.
 // MODS (envelopes and LFOs) sits above INSTR: SELECT + up / down.
-enum Screen { SCR_SEQ, SCR_PATTERN, SCR_INSTR, SCR_MODS, SCR_COUNT };
+// MIXER (track volumes and EVOLVE) sits below SEQ: SELECT + down / up.
+enum Screen { SCR_SEQ, SCR_PATTERN, SCR_INSTR, SCR_MODS, SCR_MIXER, SCR_COUNT };
 constexpr int kMainScreens = SCR_MODS; // the row SELECT + left / right walks
 
 constexpr int kTracks    = Sequencer::kTracks;
@@ -56,6 +57,22 @@ enum ParamId {
 };
 constexpr int kInstrParams = P_AMP_A;
 const char* paramName(int id);
+
+// EVOLVE: keeps mutating a track while it plays, every `every` loops of its pattern.
+// DRIFT mutates the pattern as it is now, so it wanders further over time;
+// VARY mutates a copy of the base pattern each time, so it stays near the original.
+struct Evolve {
+    static constexpr int kChoices = 6;
+    int      every  = 0; // index into kEvolveEvery; 0 = off
+    float    amount = 0.3f;
+    bool     vary   = true;
+    int      count  = 0;  // loops since EVOLVE last changed the pattern
+    uint32_t seed   = 1;
+    bool     hasBase = false;
+    Pattern  base;        // VARY: what each variation starts from
+    Pattern  last;        // what EVOLVE last wrote; anything else means the user changed it
+};
+extern const int kEvolveEvery[Evolve::kChoices]; // loops: OFF, 1, 2, 4, 8, 16
 
 struct Cursor {
     int row = 0;
@@ -95,6 +112,7 @@ struct App {
     DrumGen   drumGen[kTracks];
     MelodyGen melodyGen[kTracks];
     int       euclidRot[kTracks][kDrumPads] = {};
+    Evolve    evolve[kTracks];
 
     // One undo level per track; undo swaps, so pressing it again redoes.
     Pattern undo[kTracks];
@@ -113,6 +131,8 @@ struct App {
     Cursor drumCur{0, 0}; // col -1 = row label (Euclid), 0..15 = steps
     Cursor instCur;
     Cursor modsCur; // col = block (AMP ENV, ENV 2, LFO 1, LFO 2), row within it
+    Cursor mixCur;  // col = track, row = VOLUME / EVOLVE / AMOUNT / MODE
+    float  meter[kTracks] = {}; // shown track levels, falling slowly
 
     bool   held[BTN_COUNT]     = {};
     Uint32 repeatAt[BTN_COUNT] = {};
@@ -153,7 +173,8 @@ void        loadPreset(App& a, int t, int index);
 void        loadKit(App& a, int t, int index);
 void        setTrackType(App& a, int t, bool drum);
 void        regenerate(App& a, int t);        // locked; rebuilds track t from its generator settings
-void        mutate(App& a, int t);            // locked
+void        mutate(App& a, int t, uint32_t seed, float amount); // locked
+void        evolveOnLoop(App& a, int t);      // audio thread (the device lock is held there)
 void        newSeed(App& a);                  // current track: new seed, regenerate (with undo and a message)
 void        mutateTrack(App& a);              // current track: mutate (with undo and a message)
 float       synthParamNorm(const Params& p, int id); // bar position 0..1; bipolar amounts sit at 0.5 when 0
@@ -173,7 +194,7 @@ struct ScreenOps {
     void (*option)(App&, int fine, int coarse); // B held + D-pad; may be null
     const char* hints;
 };
-extern const ScreenOps kSeqScreen, kPatternScreen, kInstrScreen, kModsScreen;
+extern const ScreenOps kSeqScreen, kPatternScreen, kInstrScreen, kModsScreen, kMixerScreen;
 const ScreenOps& screenOps(Screen s);
 
 // GENERATE popup (ui_gen.cpp), drawn over the current screen while a.genOpen.

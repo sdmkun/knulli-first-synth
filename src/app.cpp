@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #include "gfx.h"
 
@@ -18,6 +19,8 @@ const Scale kScales[] = {
     {"BLUES",  {0, 3, 5, 6, 7, 10},    6},
 };
 const int kScaleCount = sizeof(kScales) / sizeof(kScales[0]);
+
+const int kEvolveEvery[Evolve::kChoices] = {0, 1, 2, 4, 8, 16};
 
 const char* kNoteNames[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 
@@ -164,10 +167,28 @@ void regenerate(App& a, int t) {
     }
 }
 
-void mutate(App& a, int t) {
-    uint32_t seed = SDL_GetTicks() * 2654435761u + uint32_t(t);
-    if (a.isDrum[t]) mutateDrums(a.seq.patterns[t], seed, 0.5f);
-    else mutateMelody(a.seq.patterns[t], scaleInfo(a), seed, 0.5f);
+void mutate(App& a, int t, uint32_t seed, float amount) {
+    if (a.isDrum[t]) mutateDrums(a.seq.patterns[t], seed, amount);
+    else mutateMelody(a.seq.patterns[t], scaleInfo(a), seed, amount);
+}
+
+void evolveOnLoop(App& a, int t) {
+    Evolve& e     = a.evolve[t];
+    const int every = kEvolveEvery[e.every];
+    if (every == 0 || ++e.count < every) return;
+    e.count    = 0;
+    Pattern& p = a.seq.patterns[t];
+    if (e.vary) {
+        // A pattern EVOLVE did not write is the user's (an edit, undo, a new generation): vary that from now on.
+        if (!e.hasBase || std::memcmp(&p, &e.last, sizeof(Pattern)) != 0) {
+            e.base    = p;
+            e.hasBase = true;
+        }
+        p = e.base;
+    }
+    e.seed = e.seed * 1664525u + 1013904223u;
+    mutate(a, t, e.seed, e.amount);
+    e.last = p;
 }
 
 const char* paramName(int id) { return kDesc[id].name; }
@@ -252,6 +273,6 @@ void newSeed(App& a) {
 void mutateTrack(App& a) {
     AudioLock lock(a.audio);
     pushUndo(a, a.track);
-    mutate(a, a.track);
+    mutate(a, a.track, SDL_GetTicks() * 2654435761u + uint32_t(a.track), 0.5f);
     a.message = fmt("T%d: MUTATED  (SEL+B: UNDO)", a.track + 1);
 }
