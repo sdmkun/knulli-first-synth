@@ -172,7 +172,7 @@ Json projectJson(App& a) {
     Json& tracks = j.set("tracks", Json::array());
     for (int t = 0; t < kTracks; ++t) {
         Json tr = Json::object();
-        tr.set("type", a.isDrum[t] ? "drum" : "synth");
+        tr.set("type", a.isDrum[t] ? "drum" : a.isSampler[t] ? "sampler" : "synth");
         tr.set("volume", volume[t]);
         tr.set("mute", mute[t]);
         tr.set("pan", pan[t]);
@@ -200,6 +200,34 @@ Json projectJson(App& a) {
             pad.set("pan", ps.pan);
             pads.push(std::move(pad));
         }
+
+        const Sampler::Settings& ss = a.samplers[t].settings;
+        Json& smp = tr.set("sampler", Json::object());
+        smp.set("sample", a.smpPath[t].empty() ? "" : relativeTo(a.smpPath[t], a.samplesDir));
+        smp.set("root", ss.root);
+        smp.set("fine", ss.fine);
+        smp.set("start", ss.start);
+        smp.set("attack", ss.attack);
+        smp.set("release", ss.release);
+        smp.set("gate", ss.gate);
+        smp.set("cutoff", ss.cutoff);
+        smp.set("reso", ss.reso);
+        smp.set("volume", ss.volume);
+
+        const ChordGen& cg = a.chordGen[t];
+        Json& gc = tr.set("chordGen", Json::object());
+        gc.set("on", a.chordMode[t]);
+        gc.set("prog", chordProgName(cg.prog));
+        gc.set("change", kChordChanges[cg.change]);
+        gc.set("octave", cg.octave);
+        gc.set("complex", cg.complex);
+        gc.set("voicing", chordVoicingName(cg.voicing));
+        gc.set("notes", chordNotesName(cg.notes));
+        gc.set("rhythm", chordRhythmName(cg.rhythm));
+        gc.set("gate", cg.gate);
+        gc.set("strum", cg.strum);
+        gc.set("dynamics", cg.dynamics);
+        gc.set("seed", cg.seed);
 
         const DrumGen& dg = a.drumGen[t];
         Json& gd = tr.set("drumGen", Json::object());
@@ -275,7 +303,8 @@ void applyProject(App& a, const Json& j) {
     const Json& tracks = j["tracks"];
     for (int t = 0; t < kTracks && t < int(tracks.size()); ++t) {
         const Json& tr = tracks[t];
-        setTrackType(a, t, tr["type"].str() == "drum");
+        const std::string type = tr["type"].str();
+        setTrackType(a, t, type == "drum" ? TT_DRUM : type == "sampler" ? TT_SAMPLER : TT_SYNTH);
 
         const Json& syn    = tr["synth"];
         std::string preset = syn["preset"].str();
@@ -315,6 +344,42 @@ void applyProject(App& a, const Json& j) {
             std::string sample = pj["sample"].str();
             if (!sample.empty()) setPadSample(a, t, i, resolve(sample, a.samplesDir));
         }
+
+        const Json& smp = tr["sampler"];
+        if (!smp["sample"].str().empty()) setSamplerSample(a, t, resolve(smp["sample"].str(), a.samplesDir));
+        {
+            AudioLock          lock(a.audio);
+            Sampler::Settings& ss = a.samplers[t].settings;
+            ss.root    = std::clamp(smp["root"].integer(ss.root), 0, 127);
+            ss.fine    = std::clamp(smp["fine"].integer(ss.fine), -50, 50);
+            ss.start   = std::clamp(float(smp["start"].num(ss.start)), 0.0f, 1.0f);
+            ss.attack  = std::clamp(float(smp["attack"].num(ss.attack)), 0.0f, 1.0f);
+            ss.release = std::clamp(float(smp["release"].num(ss.release)), 0.0f, 1.0f);
+            ss.gate    = smp["gate"].boolean(ss.gate);
+            ss.cutoff  = std::clamp(float(smp["cutoff"].num(ss.cutoff)), 0.0f, 1.0f);
+            ss.reso    = std::clamp(float(smp["reso"].num(ss.reso)), 0.0f, 1.0f);
+            ss.volume  = std::clamp(float(smp["volume"].num(ss.volume)), 0.0f, 1.0f);
+        }
+
+        const Json& gc = tr["chordGen"];
+        ChordGen&   cg = a.chordGen[t];
+        a.chordMode[t] = gc["on"].boolean(false);
+        for (int i = 0; i < chordProgCount(); ++i)
+            if (gc["prog"].str() == chordProgName(i)) cg.prog = i;
+        for (int i = 0; i < 4; ++i)
+            if (gc["change"].integer(0) == kChordChanges[i]) cg.change = i;
+        cg.octave  = std::clamp(gc["octave"].integer(cg.octave), 1, 7);
+        cg.complex = std::clamp(float(gc["complex"].num(cg.complex)), 0.0f, 1.0f);
+        for (int i = 0; i < int(ChordVoicing::Count); ++i)
+            if (gc["voicing"].str() == chordVoicingName(ChordVoicing(i))) cg.voicing = ChordVoicing(i);
+        for (int i = 0; i < int(ChordNotes::Count); ++i)
+            if (gc["notes"].str() == chordNotesName(ChordNotes(i))) cg.notes = ChordNotes(i);
+        for (int i = 0; i < int(ChordRhythm::Count); ++i)
+            if (gc["rhythm"].str() == chordRhythmName(ChordRhythm(i))) cg.rhythm = ChordRhythm(i);
+        cg.gate     = std::clamp(float(gc["gate"].num(cg.gate)), 0.0f, 1.0f);
+        cg.strum    = std::clamp(float(gc["strum"].num(cg.strum)), 0.0f, 1.0f);
+        cg.dynamics = std::clamp(float(gc["dynamics"].num(cg.dynamics)), 0.0f, 1.0f);
+        cg.seed     = uint32_t(gc["seed"].num(cg.seed));
 
         DrumGen&    dg = a.drumGen[t];
         const Json& gd = tr["drumGen"];

@@ -1,6 +1,7 @@
 // INSTR: the sound of the selected track. Synth tracks list the preset and every
-// synth parameter; drum tracks list the kit and a table of per-pad settings,
-// with the selected pad's waveform and its START / END points on the right.
+// synth parameter; sampler tracks their sample and how it is played; drum
+// tracks list the kit and a table of per-pad settings, with the selected pad's
+// waveform and its START / END points on the right.
 
 #include <algorithm>
 #include <cmath>
@@ -20,7 +21,13 @@ constexpr int kTop     = 72;
 constexpr int kRightX  = 640;
 constexpr int kRightW  = kW - kRightX - 16;
 
-int rowCount(const App& a) { return ROW_FIRST + (a.isDrum[a.track] ? kDrumPads : kInstrParams); }
+enum SmpParam { S_ROOT, S_FINE, S_START, S_ATTACK, S_RELEASE, S_MODE, S_CUTOFF, S_RESO, S_VOLUME, S_COUNT };
+const char* kSmpNames[S_COUNT] = {"ROOT", "FINE", "START", "ATTACK", "RELEASE", "MODE", "CUTOFF", "RESO", "VOLUME"};
+
+int rowCount(const App& a) {
+    return ROW_FIRST + (a.isDrum[a.track] ? kDrumPads : a.isSampler[a.track] ? int(S_COUNT) : kInstrParams);
+}
+const char* typeName(TrackType t) { return t == TT_DRUM ? "DRUM" : t == TT_SAMPLER ? "SAMPLER" : "SYNTH"; }
 
 // Keeps the cursor valid after the track or its type changed.
 Cursor& cursor(App& a) {
@@ -222,11 +229,117 @@ void editDrums(App& a, const Cursor& c, int fine, int coarse) {
     }
 }
 
+// ---------------------------------------------------------------- sampler
+
+constexpr int kSmpRowH = 36;
+
+std::string smpValue(const Sampler::Settings& s, int f, float& bar) {
+    bar = -1.0f;
+    auto pct = [&](float v) { bar = v; return fmt("%d%%", int(std::lround(v * 100.0f))); };
+    auto sec = [](float v) { return v < 1.0f ? fmt("%dMS", int(v * 1000.0f + 0.5f)) : fmt("%.2fS", v); };
+    switch (f) {
+    case S_ROOT:    return noteName(s.root);
+    case S_FINE:    return fmt("%+dCT", s.fine);
+    case S_START:   return pct(s.start);
+    case S_ATTACK:  bar = s.attack; return sec(attackSec(s.attack));
+    case S_RELEASE: bar = s.release; return sec(releaseSec(s.release));
+    case S_MODE:    return s.gate ? "GATE" : "ONE SHOT";
+    case S_CUTOFF: {
+        bar      = s.cutoff;
+        float hz = cutoffHz(s.cutoff);
+        return s.cutoff >= 0.999f ? "OPEN" : hz >= 1000.0f ? fmt("%.1fKHZ", hz / 1000.0f) : fmt("%dHZ", int(hz));
+    }
+    case S_RESO:    return pct(s.reso);
+    default:        return pct(s.volume);
+    }
+}
+
+void drawSampler(App& a, const Cursor& c) {
+    SDL_Renderer*     r = a.renderer;
+    const int         t = a.track;
+    Sampler::Settings s;
+    {
+        AudioLock lock(a.audio);
+        s = a.samplers[t].settings;
+    }
+    const Sample& smp  = a.smpSample[t];
+    std::string   name = smp.name.empty() ? "- (A+PAD: BROWSE)" : smp.name;
+    if (name.size() > 22) name.resize(22);
+    drawField(r, 40, kTop, "TYPE", "SAMPLER", c.row == ROW_TYPE, 230);
+    drawField(r, 40, kTop + kSmpRowH, "SAMPLE", name, c.row == ROW_SOURCE, 230);
+    for (int f = 0; f < S_COUNT; ++f) {
+        const int   y = kTop + (ROW_FIRST + f) * kSmpRowH + 8;
+        float       bar;
+        std::string v   = smpValue(s, f, bar);
+        bool        sel = c.row == ROW_FIRST + f;
+        drawField(r, 40, y, kSmpNames[f], v, sel, 230);
+        if (bar >= 0.0f) drawBar(r, 430, y + 3, 150, 10, bar, sel ? kAccent : kDim);
+    }
+
+    fillRect(r, kRightX, kTop - 6, kRightW, 300, kPanel);
+    drawText(r, kRightX + 12, kTop + 4, 2, smp.right.empty() ? "SAMPLE" : "SAMPLE  STEREO", kDim);
+    DrumKit::PadSettings marks;
+    marks.start = s.start;
+    drawWave(a, smp, marks, kRightX + 8, kTop + 30, kRightW - 16, 200);
+    if (!smp.data.empty())
+        drawText(r, kRightX + 12, kTop + 246, 2, fmt("%dMS  %dHZ", int(smp.data.size() * 1000.0 / smp.rate), smp.rate), kDim);
+    int y = kTop + 320;
+    drawText(r, kRightX + 12, y, 2, fmt("A: PLAY %s", noteName(a.lastNote[t]).c_str()), kDim);
+    drawText(r, kRightX + 12, y + 24, 2, "ON SAMPLE: A+PAD = BROWSE", kAccent);
+    drawText(r, kRightX + 12, y + 48, 2, "ROOT: THE NOTE IT WAS", kDim);
+    drawText(r, kRightX + 12, y + 72, 2, "RECORDED AT (FROM THE NAME", kDim);
+    drawText(r, kRightX + 12, y + 96, 2, "WHEN IT SAYS, LIKE STAB_F3)", kDim);
+    drawText(r, kRightX + 12, y + 132, 2, "CHORDS: X, THEN MODE CHORDS", kAccent);
+}
+
+void editSampler(App& a, const Cursor& c, int fine, int coarse) {
+    const int t = a.track;
+    if (c.row == ROW_SOURCE) {
+        openSampleBrowser(a, t, -1);
+        return;
+    }
+    AudioLock          lock(a.audio);
+    Sampler::Settings& s   = a.samplers[t].settings;
+    auto               add = [&](float v) { return std::clamp(v + fine * 0.01f + coarse * 0.1f, 0.0f, 1.0f); };
+    switch (c.row - ROW_FIRST) {
+    case S_ROOT:    s.root = std::clamp(s.root + fine + coarse * 12, 0, 127); break;
+    case S_FINE:    s.fine = std::clamp(s.fine + fine + coarse * 10, -50, 50); break;
+    case S_START:   s.start = add(s.start); break;
+    case S_ATTACK:  s.attack = add(s.attack); break;
+    case S_RELEASE: s.release = add(s.release); break;
+    case S_MODE:    s.gate = !s.gate; break;
+    case S_CUTOFF:  s.cutoff = add(s.cutoff); break;
+    case S_RESO:    s.reso = add(s.reso); break;
+    case S_VOLUME:  s.volume = add(s.volume); break;
+    }
+}
+
+void clearSampler(App& a, const Cursor& c) {
+    const Sampler::Settings def;
+    Sampler::Settings&      s = a.samplers[a.track].settings;
+    switch (c.row - ROW_FIRST) {
+    case S_ROOT: {
+        int root = rootFromName(a.smpPath[a.track]);
+        s.root   = root >= 0 ? root : def.root;
+        break;
+    }
+    case S_FINE:    s.fine = def.fine; break;
+    case S_START:   s.start = def.start; break;
+    case S_ATTACK:  s.attack = def.attack; break;
+    case S_RELEASE: s.release = def.release; break;
+    case S_MODE:    s.gate = def.gate; break;
+    case S_CUTOFF:  s.cutoff = def.cutoff; break;
+    case S_RESO:    s.reso = def.reso; break;
+    case S_VOLUME:  s.volume = def.volume; break;
+    }
+}
+
 // ---------------------------------------------------------------- screen ops
 
 void draw(App& a) {
     const Cursor& c = cursor(a);
     if (a.isDrum[a.track]) drawDrums(a, c);
+    else if (a.isSampler[a.track]) drawSampler(a, c);
     else drawSynth(a, c);
 }
 
@@ -239,11 +352,17 @@ void move(App& a, int dx, int dy) {
 void edit(App& a, int fine, int coarse) {
     const Cursor& c = cursor(a);
     if (c.row == ROW_TYPE) {
-        setTrackType(a, a.track, !a.isDrum[a.track]);
-        if (a.isDrum[a.track]) a.message = "TRACK IS NOW DRUMS (SEL+B: UNDO PATTERN)";
+        const int dir  = fine + coarse > 0 ? 1 : -1;
+        TrackType was  = trackType(a, a.track);
+        TrackType next = TrackType((int(was) + dir + TT_COUNT) % TT_COUNT);
+        if (next == TT_DRUM && a.kits.empty()) next = TrackType((int(next) + dir + TT_COUNT) % TT_COUNT);
+        setTrackType(a, a.track, next);
+        if ((was == TT_DRUM) != (next == TT_DRUM))
+            a.message = fmt("TRACK IS NOW %s (SEL+B: UNDO PATTERN)", typeName(next));
         return;
     }
     if (a.isDrum[a.track]) editDrums(a, c, fine, coarse);
+    else if (a.isSampler[a.track]) editSampler(a, c, fine, coarse);
     else editSynth(a, c, fine, coarse);
 }
 
@@ -262,6 +381,8 @@ void clear(App& a) {
     AudioLock lock(a.audio);
     if (a.isDrum[t]) {
         a.drums[t].pads[c.row - ROW_FIRST] = DrumKit::PadSettings{};
+    } else if (a.isSampler[t]) {
+        clearSampler(a, c);
     } else {
         resetSynthParam(a.synths[t].params, kPresets[a.preset[t]].params, c.row - ROW_FIRST);
         a.edited[t] = true;

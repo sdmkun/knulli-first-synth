@@ -69,7 +69,7 @@ void draw(App& a) {
         std::string name = fmt("%d %s", t + 1, trackName(a, t).c_str());
         if (name.size() > 18) name.resize(18);
         drawText(r, x + 6, kTitleY + 6, 2, name, sel ? kAccent : kText);
-        drawText(r, x + 6, kTitleY + 26, 2, fmt("%s LEN %d", a.isDrum[t] ? "DRUM" : "SYNTH", pats[t].length), kDim);
+        drawText(r, x + 6, kTitleY + 26, 2, fmt("%s LEN %d", a.isDrum[t] ? "DRUM" : a.isSampler[t] ? "SMP" : "SYNTH", pats[t].length), kDim);
         if (a.seq.solo == t) drawTextRight(r, x + kColW - 12, kTitleY + 26, 2, "SOLO", kAccent);
         else if (a.seq.mute[t]) drawTextRight(r, x + kColW - 12, kTitleY + 26, 2, "MUTE", kRecCol);
         else if (kEvolveEvery[a.evolve[t].every]) drawTextRight(r, x + kColW - 12, kTitleY + 26, 2, "EVO", kPlayCol);

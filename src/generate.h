@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include "sequencer.h"
 
@@ -48,6 +49,38 @@ struct MelodyGen {
 
 // Replaces the pattern with a scale-locked line.
 void generateMelody(Pattern& p, const MelodyGen& g, const ScaleInfo& s);
+
+// Chords in the key, a bit like Ableton's Expressive Chords: a progression of
+// scale degrees, stacked in thirds with extensions as COMPLEX goes up, voiced
+// close / open / spread and moved by the nearest inversion, then played in a rhythm.
+enum class ChordRhythm { Hold, Beats, Offbeat, Stabs, Eighths, Random, Count };
+enum class ChordVoicing { Close, Open, Spread, Count };
+enum class ChordNotes { Full, FullBass, Root, Count }; // ROOT: one note a chord, for chord-stab samples
+const char* chordRhythmName(ChordRhythm r);
+const char* chordVoicingName(ChordVoicing v);
+const char* chordNotesName(ChordNotes n);
+const char* chordProgName(int prog);
+int         chordProgCount();
+std::string chordProgText(int prog, const ScaleInfo& s); // "A- F C G" in the key (empty for RANDOM)
+constexpr int kChordChanges[] = {4, 8, 16, 32}; // steps per chord
+
+struct ChordGen {
+    int          prog     = 0;
+    int          change   = 2;    // index into kChordChanges
+    int          octave   = 4;
+    float        complex  = 0.4f; // 0 = triads .. 1 = seven-note chords and suspensions
+    ChordVoicing voicing  = ChordVoicing::Close;
+    ChordNotes   notes    = ChordNotes::Full;
+    ChordRhythm  rhythm   = ChordRhythm::Hold;
+    float        gate     = 0.9f; // how much of the time to the next hit a chord sounds
+    float        strum    = 0.0f; // spreads the notes of each chord over up to a step, low to high
+    float        dynamics = 0.4f;
+    uint32_t     seed     = 1;
+};
+
+void generateChords(Pattern& p, const ChordGen& g, const ScaleInfo& s);
+// Keeps the chords and changes how they are played: accents, a dropped hit, an added one.
+void mutateChords(Pattern& p, uint32_t seed, float amount);
 
 // Small changes that keep the character: `amount` 0..1.
 void mutateDrums(Pattern& p, uint32_t seed, float amount);

@@ -94,7 +94,8 @@ void listDir(App& a, Browser& b, const std::string& selectName = "") {
         b.paths.push_back(f.u8string());
     }
     std::string rel = fs::u8path(b.dir).lexically_relative(fs::u8path(b.root)).u8string();
-    p.title         = fmt("PAD %d SAMPLE  SAMPLES/%s", b.pad + 1, rel == "." ? "" : fontSafe(rel).c_str());
+    p.title = fmt("%s  SAMPLES/%s", b.pad < 0 ? "SAMPLER" : fmt("PAD %d SAMPLE", b.pad + 1).c_str(),
+                  rel == "." ? "" : fontSafe(rel).c_str());
     p.sel = p.top = 0;
     for (size_t i = 0; i < p.items.size(); ++i)
         if (!selectName.empty() && p.items[i] == selectName) p.sel = int(i);
@@ -124,6 +125,15 @@ void open(App& a, Browser& b, int i) {
     if (path.back() == '/') {
         b.dir = path.substr(0, path.size() - 1);
         listDir(a, b);
+        return;
+    }
+    if (b.pad < 0) {
+        if (setSamplerSample(a, b.track, path)) {
+            AudioLock lock(a.audio);
+            preview(a, b.track, a.lastNote[b.track]);
+            a.message = fmt("SAMPLER: %s  ROOT %s", fontSafe(sampleName(path)).c_str(),
+                            noteName(a.samplers[b.track].settings.root).c_str());
+        }
         return;
     }
     if (setPadSample(a, b.track, b.pad, path)) {
@@ -282,8 +292,12 @@ void openSampleBrowser(App& a, int t, int pad) {
     b->root  = fs::u8path(a.samplesDir).lexically_normal().u8string();
     if (!b->root.empty() && (b->root.back() == '/' || b->root.back() == '\\')) b->root.pop_back();
     b->dir   = b->root;
-    // Start in the folder of the kit the track plays, when it lies under samples/.
-    if (const Kit* k = trackKit(a, t); k && !k->dir.empty()) {
+    // Start in the folder of the sampler's sample or of the kit the track plays, when it lies under samples/.
+    if (pad < 0 && !a.smpPath[t].empty()) {
+        std::string kd  = fs::u8path(a.smpPath[t]).parent_path().lexically_normal().u8string();
+        std::string rel = fs::u8path(kd).lexically_relative(fs::u8path(b->root)).u8string();
+        if (!rel.empty() && rel.rfind("..", 0) != 0 && fs::is_directory(fs::u8path(kd), ec)) b->dir = kd;
+    } else if (const Kit* k = trackKit(a, t); pad >= 0 && k && !k->dir.empty()) {
         std::string kd  = fs::u8path(k->dir).lexically_normal().u8string();
         std::string rel = fs::u8path(kd).lexically_relative(fs::u8path(b->root)).u8string();
         if (!rel.empty() && rel.rfind("..", 0) != 0 && fs::is_directory(fs::u8path(kd), ec)) b->dir = kd;

@@ -11,8 +11,12 @@
 #include "drumkit.h"
 #include "generate.h"
 #include "groove.h"
+#include "sampler.h"
 #include "sequencer.h"
 #include "synth.h"
+
+// What a track plays. SAMPLER and SYNTH are melodic (tracker columns, melody / chord generation).
+enum TrackType { TT_SYNTH, TT_SAMPLER, TT_DRUM, TT_COUNT };
 
 // Buttons use SDL GameController positional names: A = south, B = east,
 // X = west, Y = north (the printed labels on the Brick may differ).
@@ -127,11 +131,15 @@ struct App {
     float scope[2048] = {};
     int   scopePos    = 0;
 
-    // Each track has both instruments; inst[] points at the one it plays.
+    // Each track has every instrument; inst[] points at the one it plays.
     Synth            synths[kTracks];
     DrumKit          drums[kTracks];
+    Sampler          samplers[kTracks];
+    Sample           smpSample[kTracks]; // what each sampler plays
+    std::string      smpPath[kTracks];
     Instrument*      inst[kTracks]   = {};
     bool             isDrum[kTracks] = {};
+    bool             isSampler[kTracks] = {};
     std::vector<Kit> kits; // loaded once at startup, never changed afterwards
     int              kit[kTracks]    = {};
     int              preset[kTracks] = {0, 2, 6, 3};
@@ -141,6 +149,8 @@ struct App {
     // Generator settings per track, and the rotation each drum row was last given.
     DrumGen   drumGen[kTracks];
     MelodyGen melodyGen[kTracks];
+    ChordGen  chordGen[kTracks];
+    bool      chordMode[kTracks] = {}; // melodic tracks: GENERATE makes chords instead of a line
     int       euclidRot[kTracks][kDrumPads] = {};
     Evolve    evolve[kTracks];
 
@@ -231,7 +241,9 @@ void        toggleUndo(App& a, int t);        // locked
 void        preview(App& a, int t, int note, int vel = kDefaultVel); // locked; auditions a note for a moment
 void        loadPreset(App& a, int t, int index);
 void        loadKit(App& a, int t, int index);
-void        setTrackType(App& a, int t, bool drum);
+void        setTrackType(App& a, int t, TrackType type);
+TrackType   trackType(const App& a, int t);
+bool        setSamplerSample(App& a, int t, const std::string& path); // loads a WAV into the track's sampler
 void        regenerate(App& a, int t);        // locked; rebuilds track t from its generator settings
 void        applyGroove(App& a);              // locked; sends the groove (or none) to the sequencer
 std::string grooveName(const App& a);

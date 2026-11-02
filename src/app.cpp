@@ -106,6 +106,7 @@ std::string trackName(const App& a, int t) {
         const Kit* k = trackKit(a, t);
         return "KIT " + (k ? k->name : std::string("-")) + (a.usesOwnKit[t] ? "*" : "");
     }
+    if (a.isSampler[t]) return "SMP " + (a.smpSample[t].name.empty() ? std::string("-") : a.smpSample[t].name);
     return std::string(kPresets[a.preset[t]].name) + (a.edited[t] ? "*" : "");
 }
 
@@ -198,28 +199,57 @@ void loadKit(App& a, int t, int index) {
     a.drums[t].setKit(&a.kits[a.kit[t]]);
 }
 
-void setTrackType(App& a, int t, bool drum) {
-    if (drum && a.kits.empty()) {
+TrackType trackType(const App& a, int t) {
+    return a.isDrum[t] ? TT_DRUM : a.isSampler[t] ? TT_SAMPLER : TT_SYNTH;
+}
+
+void setTrackType(App& a, int t, TrackType type) {
+    if (type == TT_DRUM && a.kits.empty()) {
         a.message = "NO DRUM KITS FOUND IN SAMPLES/KITS";
         return;
     }
-    if (drum == a.isDrum[t]) return;
+    const TrackType was = trackType(a, t);
+    if (type == was) return;
     AudioLock lock(a.audio);
     a.inst[t]->allOff();
-    a.isDrum[t] = drum;
-    a.seq.drumTrack[t] = drum;
-    a.inst[t]   = drum ? static_cast<Instrument*>(&a.drums[t]) : &a.synths[t];
-    // The notes of one type mean nothing to the other.
+    a.isDrum[t]        = type == TT_DRUM;
+    a.isSampler[t]     = type == TT_SAMPLER;
+    a.seq.drumTrack[t] = type == TT_DRUM;
+    a.inst[t]          = type == TT_DRUM      ? static_cast<Instrument*>(&a.drums[t])
+                         : type == TT_SAMPLER ? static_cast<Instrument*>(&a.samplers[t])
+                                              : &a.synths[t];
+    // Drum notes mean nothing to a melodic track and back; synth and sampler share theirs.
+    if ((was == TT_DRUM) == (type == TT_DRUM)) return;
     pushUndo(a, t);
     int len = a.seq.patterns[t].length;
     a.seq.patterns[t].clear();
     a.seq.patterns[t].length = len;
 }
 
+bool setSamplerSample(App& a, int t, const std::string& path) {
+    Sample      smp;
+    std::string error;
+    if (!loadWav(path, smp, error)) {
+        a.message = "CANNOT LOAD: " + fontSafe(error);
+        return false;
+    }
+    smp.name  = fontSafe(sampleName(path));
+    int root  = rootFromName(path);
+    AudioLock lock(a.audio);
+    a.samplers[t].setSample(nullptr); // no voice may keep reading the sample that is replaced
+    a.smpSample[t] = std::move(smp);
+    a.smpPath[t]   = path;
+    a.samplers[t].setSample(&a.smpSample[t]);
+    if (root >= 0) a.samplers[t].settings.root = root;
+    return true;
+}
+
 void regenerate(App& a, int t) {
     Pattern& p = a.seq.patterns[t];
     if (a.isDrum[t]) {
         generateDrums(p, a.drumGen[t]);
+    } else if (a.chordMode[t]) {
+        generateChords(p, a.chordGen[t], scaleInfo(a));
     } else {
         int len = p.length;
         generateMelody(p, a.melodyGen[t], scaleInfo(a));
@@ -229,6 +259,7 @@ void regenerate(App& a, int t) {
 
 void mutate(App& a, int t, uint32_t seed, float amount) {
     if (a.isDrum[t]) mutateDrums(a.seq.patterns[t], seed, amount);
+    else if (a.chordMode[t]) mutateChords(a.seq.patterns[t], seed, amount);
     else mutateMelody(a.seq.patterns[t], scaleInfo(a), seed, amount);
 }
 
@@ -326,6 +357,7 @@ void newSeed(App& a) {
     AudioLock lock(a.audio);
     pushUndo(a, t);
     if (a.isDrum[t]) a.drumGen[t].seed = seed;
+    else if (a.chordMode[t]) a.chordGen[t].seed = seed;
     else a.melodyGen[t].seed = seed;
     regenerate(a, t);
     a.message = fmt("T%d: NEW PATTERN, SEED %u  (SEL+B: UNDO)", t + 1, seed);

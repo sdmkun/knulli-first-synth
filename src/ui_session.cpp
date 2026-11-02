@@ -130,7 +130,8 @@ void draw(App& a) {
         drawText(r, x + 10, kTitleY + 4, 2, name, sel ? kAccent : kText);
         const char* state = a.seq.solo == t ? "SOLO" : a.seq.mute[t] ? "MUTE" : kEvolveEvery[a.evolve[t].every] ? "EVO" : "";
         SDL_Color   sc    = a.seq.solo == t ? kAccent : a.seq.mute[t] ? kRecCol : kPlayCol;
-        drawText(r, x + 10, kTitleY + 22, 2, fmt("%s %d", a.isDrum[t] ? "DRUM" : "SYNTH", live[t].length), kDim);
+        const char* type = a.isDrum[t] ? "DRUM" : a.isSampler[t] ? "SMP" : "SYNTH";
+        drawText(r, x + 10, kTitleY + 22, 2, fmt("%s%s %d", type, a.chordMode[t] && !a.isDrum[t] ? " CHORD" : "", live[t].length), kDim);
         drawTextRight(r, x + kCellW - 8, kTitleY + 22, 2, state, sc);
     }
 

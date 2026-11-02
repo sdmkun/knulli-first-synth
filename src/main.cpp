@@ -465,12 +465,14 @@ int main(int argc, char* argv[]) {
         a.right.resize(a.left.size());
         for (Synth& s : a.synths) s.init(have.freq);
         for (DrumKit& d : a.drums) d.init(have.freq);
+        for (Sampler& sm : a.samplers) sm.init(have.freq);
         a.seq.init(have.freq);
         SDL_Log("audio: %d Hz, %d ch, %d samples", have.freq, have.channels, have.samples);
     } else {
         SDL_Log("SDL_OpenAudioDevice failed: %s", SDL_GetError());
         for (Synth& s : a.synths) s.init(48000);
         for (DrumKit& d : a.drums) d.init(48000);
+        for (Sampler& sm : a.samplers) sm.init(48000);
         a.seq.init(48000);
     }
 
@@ -509,7 +511,7 @@ int main(int argc, char* argv[]) {
         SDL_free(base);
     }
     if (!loadProject(a)) {
-        setTrackType(a, kTracks - 1, true); // the last track starts as drums when a kit is available
+        setTrackType(a, kTracks - 1, TT_DRUM); // the last track starts as drums when a kit is available
         makeDefaultSong(a);
     }
     {

@@ -256,3 +256,231 @@ void mutateMelody(Pattern& p, const ScaleInfo& s, uint32_t seed, float amount) {
         }
     }
 }
+
+// ---------------------------------------------------------------- chords
+
+namespace {
+
+struct Prog {
+    const char* name;
+    int         degrees[8]; // scale degrees, 0 = the key's root; -1 ends the list
+};
+const Prog kProgs[] = {
+    {"EPIC", {0, 5, 2, 6, -1}},        // i VI III VII (in minor)
+    {"POP", {0, 4, 5, 3, -1}},         // I V vi IV
+    {"DARK", {0, 3, 6, 2, -1}},        // i iv VII III
+    {"JAZZ", {1, 4, 0, 5, -1}},        // ii V I vi
+    {"DRONE", {0, 0, 5, 6, -1}},
+    {"LIFT", {3, 4, 5, 5, -1}},        // IV V vi vi
+    {"CIRCLE", {0, 3, 6, 2, 5, 1, 4, 0}}, // down in fourths through the key
+    {"RANDOM", {-1}},
+};
+constexpr int kProgCount = sizeof(kProgs) / sizeof(kProgs[0]);
+
+const int kMinor[7] = {0, 2, 3, 5, 7, 8, 10};
+
+// Pitches (low to high) of the chord on `degree`, stacked in thirds of a
+// seven-note scale. Pentatonic and blues scales borrow natural minor here.
+int chordPitches(int degree, int count, bool sus, int octave, const ScaleInfo& in, int* out) {
+    ScaleInfo s = in;
+    if (s.count != 7) s.steps = kMinor, s.count = 7;
+    // Thirds in the order they are added: 3rd, 5th, 7th, 9th, 13th, 11th. A six-note chord drops the 5th.
+    int order[6] = {2, 4, 6, 8, 12, 10};
+    if (sus) order[0] = 3; // a 4th instead of the 3rd
+    int n = 0;
+    out[n++] = degreePitch(degree, octave, s);
+    for (int k = 0; k < 6 && n < count; ++k) {
+        if (k == 1 && count == 6) continue;
+        out[n++] = degreePitch(degree + order[k], octave, s);
+    }
+    std::sort(out, out + n);
+    return n;
+}
+
+// Moves notes by octaves so the chord sits closest to `prev` (or around `centre`).
+void voiceLead(int* p, int n, const int* prev, int prevN, int centre) {
+    int best[SeqStep::kMaxNotes], bestScore = 1 << 30;
+    int cand[SeqStep::kMaxNotes];
+    std::copy(p, p + n, best);
+    for (int inv = 0; inv < n; ++inv) {
+        for (int shift = -2; shift <= 1; ++shift) {
+            for (int i = 0; i < n; ++i) cand[i] = p[i] + (i < inv ? 12 : 0) + 12 * shift;
+            std::sort(cand, cand + n);
+            int score = 0;
+            if (prevN > 0) {
+                for (int i = 0; i < n; ++i) score += std::abs(cand[i] - prev[std::min(i * prevN / n, prevN - 1)]);
+            }
+            int mid = (cand[0] + cand[n - 1]) / 2;
+            score += std::abs(mid - centre) * (prevN > 0 ? 1 : 4);
+            if (cand[0] < 28 || cand[n - 1] > 108) score += 1000;
+            if (score < bestScore) {
+                bestScore = score;
+                std::copy(cand, cand + n, best);
+            }
+        }
+    }
+    std::copy(best, best + n, p);
+}
+
+bool rhythmHit(ChordRhythm r, int stepInChord, int step, Rng& rng, float accent) {
+    const int b = step % 16;
+    switch (r) {
+    case ChordRhythm::Hold:    return stepInChord == 0;
+    case ChordRhythm::Beats:   return b % 4 == 0;
+    case ChordRhythm::Offbeat: return b % 4 == 2;
+    case ChordRhythm::Stabs:   return b == 0 || b == 3 || b == 6 || b == 10 || b == 12;
+    case ChordRhythm::Eighths: return b % 2 == 0;
+    case ChordRhythm::Random:  return stepInChord == 0 || rng.uni() < (b % 2 == 0 ? 0.35f : 0.15f) + accent * 0.1f;
+    default:                   return false;
+    }
+}
+
+} // namespace
+
+const char* chordRhythmName(ChordRhythm r) {
+    static const char* kNames[] = {"HOLD", "BEATS", "OFFBEAT", "STABS", "EIGHTHS", "RANDOM"};
+    return kNames[std::clamp(int(r), 0, int(ChordRhythm::Count) - 1)];
+}
+const char* chordVoicingName(ChordVoicing v) {
+    static const char* kNames[] = {"CLOSE", "OPEN", "SPREAD"};
+    return kNames[std::clamp(int(v), 0, int(ChordVoicing::Count) - 1)];
+}
+const char* chordNotesName(ChordNotes n) {
+    static const char* kNames[] = {"FULL", "FULL+BASS", "ROOT ONLY"};
+    return kNames[std::clamp(int(n), 0, int(ChordNotes::Count) - 1)];
+}
+const char* chordProgName(int prog) { return kProgs[std::clamp(prog, 0, kProgCount - 1)].name; }
+int         chordProgCount() { return kProgCount; }
+
+std::string chordProgText(int prog, const ScaleInfo& in) {
+    static const char* kNames[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    ScaleInfo s = in;
+    if (s.count != 7) s.steps = kMinor, s.count = 7;
+    const Prog& p = kProgs[std::clamp(prog, 0, kProgCount - 1)];
+    std::string out;
+    for (int i = 0; i < 8 && p.degrees[i] >= 0; ++i) {
+        const int d     = p.degrees[i];
+        const int root  = degreePitch(d, 4, s);
+        const int third = degreePitch(d + 2, 4, s) - root, fifth = degreePitch(d + 4, 4, s) - root;
+        if (!out.empty()) out += ' ';
+        out += kNames[root % 12];
+        if (fifth == 6) out += "DIM";
+        else if (third == 3) out += '-';
+    }
+    return out;
+}
+
+void generateChords(Pattern& p, const ChordGen& g, const ScaleInfo& s) {
+    Rng       rng(g.seed);
+    const int len = p.length;
+    p.clear();
+    p.length = len;
+
+    // The progression: a fixed one, or a walk that favours strong moves (down a fifth, to the relative).
+    const Prog& prog = kProgs[std::clamp(g.prog, 0, kProgCount - 1)];
+    int degrees[16], nDeg = 0;
+    if (prog.degrees[0] >= 0) {
+        while (nDeg < 8 && prog.degrees[nDeg] >= 0) degrees[nDeg] = prog.degrees[nDeg], ++nDeg;
+    } else {
+        int d     = 0;
+        const int moves[] = {3, 4, 5, 2, 6, 1};
+        for (; nDeg < 4; ++nDeg) {
+            degrees[nDeg] = d;
+            d             = (d + moves[rng.range(rng.uni() < 0.6f ? 3 : 6)]) % 7;
+        }
+    }
+
+    const int span   = kChordChanges[std::clamp(g.change, 0, 3)];
+    const int count  = 3 + int(std::lround(std::clamp(g.complex, 0.0f, 1.0f) * 4.0f)); // 3 .. 7 notes
+    const int centre = 12 * (g.octave + 1) + s.root + 5;
+
+    // One voicing per chord, each led from the one before.
+    int  voiced[32][SeqStep::kMaxNotes], nVoiced[32];
+    int  prev[SeqStep::kMaxNotes], prevN = 0;
+    const int chords = (len + span - 1) / span;
+    for (int c = 0; c < chords && c < 32; ++c) {
+        const int degree = degrees[c % nDeg];
+        const bool sus   = g.complex > 0.3f && rng.uni() < g.complex * 0.25f;
+        int pitches[SeqStep::kMaxNotes];
+        int n = chordPitches(degree, std::min(count, 7), sus, g.octave, s, pitches);
+        if (g.notes == ChordNotes::Root) {
+            n = 1;
+            int best = pitches[0];
+            for (int o = -2; o <= 2; ++o) { // the root, in the octave nearest the last one
+                int q = pitches[0] + 12 * o;
+                if (std::abs(q - (prevN ? prev[0] : centre)) < std::abs(best - (prevN ? prev[0] : centre))) best = q;
+            }
+            pitches[0] = best;
+        } else {
+            voiceLead(pitches, n, prev, prevN, centre);
+            if (g.voicing == ChordVoicing::Open && n >= 3) { // drop 2: second from the top goes down an octave
+                pitches[n - 2] -= 12;
+                std::sort(pitches, pitches + n);
+            } else if (g.voicing == ChordVoicing::Spread && n >= 3) { // every other note up an octave
+                for (int i = 1; i < n; i += 2) pitches[i] += 12;
+                pitches[0] -= 12;
+                std::sort(pitches, pitches + n);
+            }
+        }
+        std::copy(pitches, pitches + n, prev);
+        prevN = n;
+        if (g.notes == ChordNotes::FullBass && n < SeqStep::kMaxNotes) { // the root two octaves under the chord's root
+            int root = degreePitch(degree, g.octave - 2, s.count == 7 ? s : ScaleInfo{kMinor, 7, s.root});
+            std::copy_backward(pitches, pitches + n, pitches + n + 1);
+            pitches[0] = root;
+            ++n;
+        }
+        std::copy(pitches, pitches + n, voiced[c]);
+        nVoiced[c] = n;
+    }
+
+    // Hits: where the rhythm says, each playing its chord until the gate runs out.
+    bool hit[Pattern::kMaxSteps] = {};
+    for (int i = 0; i < len; ++i) hit[i] = rhythmHit(g.rhythm, i % span, i, rng, beatAccent(i));
+    for (int i = 0; i < len; ++i) {
+        if (!hit[i]) continue;
+        const int c = std::min(i / span, 31);
+        int next = i + 1;
+        while (next < len && !hit[next]) ++next;
+        const int gap  = next - i;
+        const int hold = std::clamp(int(std::lround(gap * g.gate)), 1, gap);
+        const int vel  = dynVel(beatAccent(i) + (rng.uni() - 0.5f) * 0.4f, g.dynamics);
+        SeqStep& st    = p.steps[i];
+        const int n    = nVoiced[c];
+        for (int k = 0; k < n; ++k) {
+            st.notes[k] = {int8_t(std::clamp(voiced[c][k], 0, 127)), uint8_t(vel)};
+            int ticks   = n > 1 ? int(std::lround(g.strum * (kTicksPerStep - 1) * k / (n - 1))) : 0;
+            if (ticks > 0) st.notes[k].fx = Fx::Dly, st.notes[k].fxVal = uint8_t(ticks);
+        }
+        if (hold < gap || next >= len) { // an OFF where the chord stops (the next hit would end it anyway)
+            SeqStep& end = p.steps[(i + hold) % len];
+            for (int k = 0; k < SeqStep::kMaxNotes; ++k) setOff(end, k);
+        }
+        if (hold == gap && next < len) { // columns the next chord leaves free still need ending
+            for (int k = nVoiced[std::min(next / span, 31)]; k < n; ++k) setOff(p.steps[next], k);
+        }
+    }
+}
+
+void mutateChords(Pattern& p, uint32_t seed, float amount) {
+    Rng rng(seed);
+    for (int i = 0; i < p.length; ++i) {
+        SeqStep& st = p.steps[i];
+        if (st.count() == 0) continue;
+        if (rng.uni() < amount * 0.3f) { // accent the whole chord up or down
+            int d = rng.uni() < 0.5f ? 1 : -1;
+            for (SeqNote& n : st.notes)
+                if (n.isNote()) n.vel = uint8_t(std::clamp(n.vel + d, 1, kMaxVel));
+        }
+        // Echo the chord on the next empty off-beat, briefly.
+        int j = i + 2;
+        if (j + 1 < p.length && p.steps[j].empty() && j % 4 == 2 && rng.uni() < amount * 0.15f) {
+            for (int k = 0; k < SeqStep::kMaxNotes; ++k) {
+                if (!st.notes[k].isNote()) continue;
+                p.steps[j].notes[k]     = st.notes[k];
+                p.steps[j].notes[k].vel = uint8_t(std::max(1, st.notes[k].vel - 1));
+                setOff(p.steps[j + 1], k);
+            }
+        }
+    }
+}
