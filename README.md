@@ -16,24 +16,30 @@ TrimUI Brick（Knulli OS）向けの、4 トラックの小さなグルーブボ
 ## 構成
 
 ```
-src/synth.*      DSP：8 ボイス、PolyBLEP の基本波形とウェーブテーブル、デチューン、サブ、ノイズ、ドライブ、
-                 TPT SVF（LP / HP / BP）、ADSR、モジュレーション用エンベロープ、LFO × 2、フィードバックディレイ
+src/synth.*      DSP（ステレオ）：8 ボイス、PolyBLEP の基本波形とウェーブテーブル、デチューン、ユニゾン（7 つまで）と WIDTH、
+                 サブ、ノイズ、ドライブ、TPT SVF（LP / HP / BP）、ADSR、モジュレーション用エンベロープ、LFO × 2、
+                 フィードバックディレイ、コーラス
 src/wavetable.*  ウェーブテーブル 7 種（FFT で倍音を切った 9 段階を起動時に作る）
+src/sampler.*    1 つの WAV を音程を付けて鳴らすサンプラー（ROOT、ATTACK / RELEASE、ローパス、16 音）
+src/reverb.*     センド用のステレオリバーブ（4 段のオールパスと 8 本の FDN）
+src/json.*       プロジェクトファイル用の小さな JSON
+src/project.cpp  プロジェクトの保存と読み込み（projects/current.json）
 src/sequencer.*  4 トラックのステップシーケンサー：オーディオスレッドで駆動、1 ステップ 12 ティック、
                  ノートコマンド（RET / ARP / KIL / DLY / CHA）、トラックごとのパターン長と音量、ミュート / ソロ、
-                 スウィング、周の切れ目のフック（EVOLVE 用）、マスターのソフトクリップ
-src/generate.*   パターンの生成：ドラムのスタイル表とユークリッドリズム、スケールに沿ったメロディ、ミューテート
-src/drumkit.*    WAV の読み込み（8/16/24/32bit PCM、32bit float、ステレオはモノラルに）と、8 パッドのワンショットサンプラー
-src/instrument.h シンセとドラムキットの共通インターフェース
+                 スウィング、周の切れ目のフック（EVOLVE 用）、クリップの切り替え（小節の頭）、パン・センド・ダック、
+                 リバーブ、マスターのソフトクリップ
+src/generate.*   パターンの生成：ドラムのスタイル表とユークリッドリズム、スケールに沿ったメロディ、コード進行、ミューテート
+src/drumkit.*    WAV の読み込み（8/16/24/32bit PCM、32bit float、モノラル / ステレオ）と、8 パッドのワンショットサンプラー
+src/instrument.h シンセ・サンプラー・ドラムキットの共通インターフェース（ステレオで書き出す）
 src/groove.*     Ableton のグルーヴ（.agr、XML とバイナリ）の読み込み
 src/app.*        画面どうしで共有する状態（トラック、カーソル、アンドゥ、生成と EVOLVE の設定）と操作
-src/ui*.cpp      画面：ui.cpp（上下の帯）、ui_seq.cpp、ui_pattern.cpp、ui_instr.cpp、ui_mods.cpp、ui_mixer.cpp、ui_gen.cpp（GENERATE メニュー）、
+src/ui*.cpp      画面：ui.cpp（上下の帯）、ui_session.cpp（ホーム、クリップの棚）、ui_seq.cpp、ui_pattern.cpp、ui_instr.cpp、ui_mods.cpp、ui_mixer.cpp、ui_gen.cpp（GENERATE メニュー）、
                  ui_popup.cpp（一覧のポップアップ：ノートコマンド、グルーヴ、サンプルのファイルブラウザ）
 src/gfx.*        描画の道具と 5x7 ビットマップフォント（font.h）
 src/main.cpp     入力（キーボード / GameController / 生ジョイスティック）、オーディオ出力、メインループ
 docker/          aarch64 クロスビルド環境（Debian bookworm、実行には glibc 2.36 以上が必要）
 package/         Knulli Ports 用ランチャー
-samples/kits/    ドラムキット（BASIC は scripts/make-basic-kit.py で合成したもの）
+samples/kits/    PC で試す用のドラムキット（BASIC は scripts/make-basic-kit.py で合成した仮の音）。Knulli 版には入れない
 scripts/         ビルドスクリプト
 ```
 
@@ -52,7 +58,7 @@ Knulli 用（Docker Desktop が必要）：
 .\scripts\build-knulli.ps1
 ```
 
-`dist\ports\` の中身を、SD カードの `/userdata/roms/ports/`（SMB 経由なら `\\KNULLI\share\roms\ports`）にコピーします。その後 Knulli のメニューで「ゲームリストを更新」を実行すると、Ports に **KnulliFirstSynth** が表示されます。
+`dist\ports\` の中身を、SD カードの `/userdata/roms/ports/`（SMB 経由なら `\\KNULLI\share\roms\ports`）にコピーします。サンプルとグルーヴはビルドに含めません（実機の `samples/` と `grooves/` に自分で入れたものを上書きしないため）。その後 Knulli のメニューで「ゲームリストを更新」を実行すると、Ports に **KnulliFirstSynth** が表示されます。
 
 ```
 roms/ports/
@@ -60,22 +66,24 @@ roms/ports/
 ├── KnulliFirstSynth.sh.keys
 └── knulli-first-synth/
     ├── ksynth
-    └── samples/kits/BASIC/*.wav
+    ├── samples/      自分で入れる（kits/<キット名>/*.wav、ほかの WAV はどこでも）
+    ├── grooves/      自分で入れる（*.agr）
+    └── projects/current.json   プロジェクト（自動で保存・読み込み）
 ```
 
 起動ログは `roms/ports/knulli-first-synth/log.txt` に出力されます（SDL のドライバ、オーディオの設定、コントローラー名と GUID）。
 
 ## 操作
 
-M8 のように画面を行き来します。SEQ・PATTERN・INSTR は横に並んでいて Y + 左右で移ります。MODS は INSTR の上、MIXER は SEQ の下にあって、Y + 上下で移ります（M8 の SHIFT + 十字キーと同じ。SELECT + 十字キーでも移れます）。画面上端に今いる画面が出ます。
+M8 のように画面を行き来します。SESSION（ホーム）・SEQ・PATTERN・INSTR は横に並んでいて Y + 左右で移ります。MODS は INSTR の上、MIXER は SESSION の下にあって、Y + 上下で移ります（M8 の SHIFT + 十字キーと同じ。SELECT + 十字キーでも移れます）。画面上端に今いる画面が出ます。
 
 ```
-                                      MODS（エンベロープと LFO）
-                                       ↑↓ Y + 上下
-SEQ  ⇄  PATTERN  ⇄  INSTR
-4 トラック一覧   選んだトラックの打ち込み   選んだトラックの音色
+                                                         MODS（エンベロープと LFO）
+                                                          ↑↓ Y + 上下
+SESSION  ⇄  SEQ  ⇄  PATTERN  ⇄  INSTR
+クリップの棚   4 トラック一覧   選んだトラックの打ち込み   選んだトラックの音色
  ↑↓ Y + 上下
-MIXER（音量と EVOLVE）
+MIXER（音量・パン・リバーブ・ダック・EVOLVE）
 ```
 
 基本の操作はどの画面でも同じです。十字キーでカーソルを動かし、A で「置く / 鳴らす / 開く」、A を押したまま十字キーでカーソルの下の値を変えます（左右で細かく、上下で大きく）。B を押したまま A で消す / 元に戻すです。
@@ -97,11 +105,29 @@ MIXER（音量と EVOLVE）
 | R3（正面中央上の右） | R | 選んでいるトラックのソロ（もう一度で解除） |
 | START | Enter | 再生 / 停止（停止すると頭に戻る） |
 | SELECT + 十字キー | Tab + 矢印 | Y + 十字キーと同じ（画面の切り替え） |
+| SELECT + A | Tab + K | 選んでいるトラックのパターンを、クリップの棚の空いている枠にとっておく（KEEP） |
 | SELECT + B | Tab + L | 選んでいるトラックのアンドゥ（もう一度でリドゥ） |
 | SELECT + X | Tab + J | 選んでいるトラックのパターンを消す |
 | SELECT + START | Esc | 終了 |
 
 生成・ミューテート・クリア・打ち込みの前には、そのトラックのパターンを 1 段だけ控えています。SELECT + B で戻し、もう一度押すとやり直せます。
+
+### SESSION 画面（ホーム）
+
+Ableton のセッションビューのような、クリップの棚です。トラックが列、上の LIVE の段が今鳴っているパターン、その下の 1〜8 の段がとっておいたクリップです。どのマスも中の音がピアノロールのように見え、再生中のマスには再生位置が左から右へ流れます。
+
+- 空いているマスで A：そのトラックの今のパターンをそこにとっておく
+- クリップのマスで A：そのクリップを次の小節の頭から鳴らす（止まっているときはすぐ入れ替わる）。入れ替わるまでマスが点滅します。入れ替わる前のパターンは SELECT + B で戻せます
+- 左の段番号で A：その段のクリップを全トラックまとめて鳴らす（シーン）。空の段なら 4 トラックの今のパターンをまとめてとっておく。LIVE の段番号で A は、空いている最初の段にまとめてとっておきます
+- B + A：クリップを消す（段番号の上なら段ごと）
+- LIVE のマスで A：そのトラックを PATTERN 画面で開く
+- LIVE のマスの FROM 3 は「クリップ 3 から来た」、`*` はそこから変わっている（手で直した、EVOLVE が動かした）印です。NEW はどのクリップからでもないパターン
+- 左上の 4 つの四角は小節の中の位置です
+- 生成（X）と SELECT + A のとっておきを繰り返して、気に入ったパターンを棚にためていく使い方を想定しています
+
+#### プロジェクトの保存
+
+音色・設定・今のパターン・クリップの棚は、アプリの横の `projects/current.json` に自動で保存され、次の起動で読み込まれます（棚を変えたときはすぐ、それ以外は変わってから 5 秒以内、終了時）。中身は人が読める JSON で、PC で直接いじれます。壊れたファイルは `current.json.broken` に名前を変えて、新しく始めます。
 
 ### SEQ 画面
 
@@ -157,7 +183,18 @@ X で、選んでいるトラックの生成メニューが画面の右に開き
 - NEW SEED（A か X）：新しい乱数の種で作り直す
 - MUTATE（A か Y）：少しだけ変える
 - 設定の値を A + 十字キーで変えると、その場でパターンが作り直されます（LEN だけはパターンの長さを変えるだけで、中身はそのまま）。B + A で初期値に戻します
+- メロディのトラック（SYNTH と SAMPLER）は MODE で MELODY と CHORDS を切り替えます
 - メロディの設定：OCT（音域の中心）、DENSITY（音の数）、RANGE（音域の広さ）、MOTION（跳躍の多さ）、LENGTH（音の長さ。OFF を置いて表します）、CHORD（和音にする割合）、DYNAMICS（拍に合わせた強弱の付け方。0% ならすべて 6）、SEED
+- コードの設定（MODE = CHORDS）：Ableton の Expressive Chords のように、キーに沿ったコード進行を作ります。メニューの下にその進行のコード名（例 `C- G# D# A#`、`-` はマイナー）が出ます
+  - PROGRESSION：EPIC（i VI III VII）/ POP（I V vi IV）/ DARK（i iv VII III）/ JAZZ（ii V I vi）/ DRONE / LIFT（IV V vi vi）/ CIRCLE（4 度ずつ下がる 8 コード）/ RANDOM（シードから作る）
+  - CHANGE：1 コードのステップ数（4 / 8 / 16 / 32）。CHORDS にしたときパターンが 64 より短ければ 64 にします
+  - COMPLEX：音の数。TRIADS（3 和音）→ 7THS → 9THS → 13THS（5 度を抜いて 11・13 度）→ 7 NOTES。上げるとサスペンションも混ざります
+  - VOICING：CLOSE（密集）/ OPEN（ドロップ 2）/ SPREAD（広く）。どれも前のコードから一番近い転回形を選ぶので、なめらかにつながります
+  - NOTES：FULL / FULL+BASS（2 オクターブ下にルート）/ ROOT ONLY（ルートだけ。コードになっているスタブのサンプル用）
+  - RHYTHM：HOLD（伸ばす）/ BEATS（4 分）/ OFFBEAT（裏拍）/ STABS（3-3-2 のスタブ）/ EIGHTHS（8 分）/ RANDOM
+  - GATE：次の音までのうち鳴らす長さ。STRUM：和音を低い音から順に、最大 1 ステップかけてずらす（ノートごとの DLY で入ります）
+  - コードのトラックのミューテート（EVOLVE も）は、和音はそのままで強弱と、裏拍への短いエコーだけを変えます
+  - PATTERN 画面のトラッカーには 4 列しか出ないので、5 音以上のコードは画面に見えない列でも鳴っています
 - ドラムの設定：STYLE（FOUR = 4 つ打ち / BREAK / HALF = ハーフタイム / JUNGLE / RANDOM）、DENSITY、VARIATION（ゴーストノート、フィル、ハイハットやフィルのロールの量）、DYNAMICS（骨格の音とダウンビートを強く、ゴーストノートを弱く、フィルはだんだん強く）、SEED
 - ドラムのミューテートでは、キックとスネアの骨格（1・3 拍目のキック、2・4 拍目のスネア）は残します
 - 同じ設定・同じシードなら毎回同じ結果になります。メロディは KEY と SCALE に合わせて作ります
@@ -167,7 +204,8 @@ X で、選んでいるトラックの生成メニューが画面の右に開き
 
 選んでいるトラックの音色です。A で音を確かめられます。
 
-- TYPE：SYNTH ⇄ DRUM の切り替え（A + 十字キー）。切り替えるとパターンは消えます（SELECT + B で戻せます）
+- TYPE：SYNTH → SAMPLER → DRUM の切り替え（A + 十字キー）。ドラムとメロディのトラックを行き来するとパターンは消えます（SELECT + B で戻せます）。SYNTH と SAMPLER の間はパターンがそのまま残ります
+- サンプラー：SAMPLE（A + 十字キーでファイルブラウザ）、ROOT（そのサンプルが鳴っている音。ファイル名に `Stab_F#3` や `Chord Am` のように音名があれば読み取る。オクターブがなければ 4）、FINE（±50 セント）、START、ATTACK、RELEASE、MODE（GATE = 音の終わりで RELEASE / ONE SHOT = サンプルの最後まで）、CUTOFF / RESO（ローパス）、VOLUME。16 音まで同時に鳴り、ステレオのサンプルはステレオのまま鳴ります
 - シンセ：PRESET と、オシレーター・フィルター・ディレイのパラメータ（下の表）。B + A でそのパラメータをプリセットの値に戻します。右側に今の波形（ウェーブテーブルは POS の位置のフレーム）と出力が出ます
 - ドラム：KIT と、8 パッドぶんの SAMPLE / PITCH（±24 半音）/ START / END（再生する範囲）/ VOL。右側に選んでいるパッドの波形と START（緑）・END（赤）が出ます
 - パッドの SAMPLE（左端のパッド名）で A + 十字キーを押すと、ファイルブラウザが開きます。`samples/` の下のフォルダと WAV が並び、最初は今のキットのフォルダが開きます。上下で選び、右（または A）でフォルダに入り、左で上のフォルダに戻ります。WAV で A を押すと、そのパッドに読み込んで鳴らします（ブラウザは開いたままなので、続けて聴き比べられます）。B で閉じます
@@ -187,9 +225,12 @@ INSTR から Y + 上で開く、シンセのエンベロープと LFO の画面�
 
 ### MIXER 画面
 
-SEQ から Y + 下で開く、4 トラックの音量と EVOLVE の画面です。十字キーの左右でトラック、上下で項目を選びます（L1 / R1 でも選べます）。
+SESSION から Y + 下で開く、4 トラックの音量・パン・センド・ダックと EVOLVE の画面です。十字キーの左右でトラック、上下で項目を選びます（L1 / R1 でも選べます）。
 
 - VOLUME：トラックの音量（0〜150%、白い線が 100%）。A + 十字キーで変え、B + A で 100% に戻します。右の縦の棒はそのトラックの出力レベル（-48dB〜0dB、赤は 0dB 近く）
+- PAN：左右の位置（L100〜C〜R100）
+- REVERB：リバーブに送る量。リバーブは全トラック共通で、下の REVERB SIZE（残響の長さ 0.4〜8 秒）と TONE（暗い〜明るい）で変えます
+- DUCK：サイドチェイン。ドラムのトラックのキック（パッド 1）が鳴るたびに、このトラックの音量をこの量だけ下げてから戻します（ポンピング）。戻る速さは下の DUCK RELEASE（40〜400ms）。ドラムのトラックには効きません
 - EVOLVE：再生しながら、パターンが N 周するたびに自動でミューテートします（OFF / 1 / 2 / 4 / 8 / 16 周）。周の切れ目で変わるので、変わった形が次の周の頭から鳴ります。下の緑の棒が次に変わるまでの進み具合です
 - AMOUNT：1 回の変化の大きさ（Y のミューテートは 50%）
 - MODE：VARY は毎回「元のパターン」から変化させるので、元の雰囲気のまわりを行き来します。DRIFT は今のパターンから変化させるので、だんだん遠くへ離れていきます。A で切り替えます
@@ -228,18 +269,24 @@ Ableton Live のグルーヴファイル（.agr）を読み込んで、曲全体
 | WAVE | 波形。SINE / TRIANGLE / SAW / SQUARE / NOISE と、ウェーブテーブル 7 種（WT MORPH = サイン→三角→ノコギリ→矩形、WT PULSE = パルス幅、WT SYNC = ハードシンク、WT VOWEL = 母音 A→E→I→O→U、WT FOLD = ウェーブフォールド、WT HARM = ドローバー風の倍音、WT DIGI = 粗いデジタル） |
 | POS | ウェーブテーブルの位置（フレームの間はなめらかにつながる）。SQUARE ではパルス幅（50%〜5%） |
 | PITCH | 音程のずらし（±24 半音） |
-| DETUNE | 2 つ目のオシレーターのずらし幅（0〜30 セント） |
+| DETUNE | 2 つ目のオシレーターのずらし幅（0〜30 セント）。UNISON が 1 のときだけ |
+| UNISON | オシレーターの数（1〜7）。2 以上でスーパーソウのように重ねる |
+| SPREAD | UNISON で重ねたオシレーターのずらし幅（0〜50 セント） |
 | SUB | 1 オクターブ下の矩形波の量 |
 | NOISE | ノイズの量 |
 | FILTER | LOWPASS / HIGHPASS / BANDPASS / OFF |
 | CUTOFF / RESO | カットオフ周波数（40Hz〜18kHz）とレゾナンス |
 | DRIVE | フィルターの前で歪ませる量 |
 | VOLUME | 音量 |
+| WIDTH | ずらしたオシレーター（DETUNE の 2 つ、UNISON の重ね）を左右に広げる量。0 より上でフィルターも左右別になる |
+| CHORUS | ステレオのコーラスを混ぜる量 |
 | DLY TIME / DLY FDBK / DLY MIX | ディレイの時間（10ms〜1s）、フィードバック、原音に混ぜる量。時間を動かすとテープのようにピッチが揺れる |
 
 ウェーブテーブルは起動時に倍音の数を変えた 9 段階を作っておき（10ms ほど）、音の高さに合わせて折り返しノイズが出ない段を使います。
 
-プリセットは 15 種です（BRIGHT SAW / SOFT SINE / ACID SQUARE / DUB PLUCK / VIBRATO LEAD / HOLLOW PULSE / WARM PAD / WOOD FLUTE / NOISE WIND / VOWEL PAD / SYNC LEAD / FOLD BASS / DIGI KEYS / DRAWBAR ORGAN / MORPH PLUCK）。
+プリセットは 21 種です（BRIGHT SAW / SOFT SINE / ACID SQUARE / DUB PLUCK / VIBRATO LEAD / HOLLOW PULSE / WARM PAD / WOOD FLUTE / NOISE WIND / VOWEL PAD / SYNC LEAD / FOLD BASS / DIGI KEYS / DRAWBAR ORGAN / MORPH PLUCK / SUPERSAW / SAW STAB / REESE BASS / WIDE PLUCK / SAW PAD / PULSE LEAD）。UNISON 7 のプリセット（SUPERSAW、SAW PAD）は重めなので、和音で使うときは DSP の表示を見てください。
+
+音はすべてステレオです。トラックの音は MIXER の PAN とダックを通ってまとめられ、リバーブ（8 本のディレイのフィードバック網）を足してから、軽いリミッターをかけて出ます。
 
 ### ドラム
 
@@ -252,7 +299,8 @@ Ableton Live のグルーヴファイル（.agr）を読み込んで、曲全体
 `samples/kits/` の下にフォルダを作って WAV を入れると、1 つのキットになります（実機では `roms/ports/knulli-first-synth/samples/kits/`）。
 
 - ファイル名の順に、最初の 8 個がパッド 1〜8 になります。`1-KICK.wav` のように番号を付けると順番を決められ、画面には番号を除いた名前が出ます
-- 対応形式：8/16/24/32bit の PCM と 32bit float。ステレオはモノラルにまとめます。サンプルレートは何でも構いません
+- 対応形式：8/16/24/32bit の PCM と 32bit float。ステレオはステレオのまま鳴ります（3 チャンネル以上は最初の 2 つ）。サンプルレートは何でも構いません
+- パッドごとに PAN もあります（INSTR の右端の列）
 - キットは起動時に読み込みます。入れ替えたらアプリを起動し直してください
 
 A/B/X/Y の割り当ては SDL GameController の位置名に合わせています（A=下、B=右、X=左、Y=上）。そのため、本体の印字とはずれることがあります。
@@ -279,9 +327,10 @@ Brick の内蔵パッドは、SDL GameController としてそのまま認識さ�
 
 ## 次にやること
 
+- 実機での確認（SESSION、保存、ステレオ、ユニゾン、リバーブ、サンプラー、コード）と DSP 負荷
+- クリップの棚の発展（クリップのコピー・並べ替え、シーンをつなげて展開を作る）
+- ステムの書き出し（トラックごとの WAV）
 - ノートコマンドの追加（グライド、音量のスライドなど）
-- プロジェクトの保存 / 読み込み（JSON）
 - MIDI クロック受信
-- リバーブ
-- サンプル録音とグラニュラーエンジン（GrainBrick 方向）
 - プリセットの保存
+- サンプル録音とグラニュラーエンジン（GrainBrick 方向）
