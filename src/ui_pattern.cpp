@@ -122,6 +122,16 @@ void drawSynth(App& a, const Pattern& p, int playStep, bool playing) {
     }
 }
 
+// The note under the synth cursor (any of its four sub-columns), or null. Locked.
+SeqNote* synthNote(App& a) {
+    const Cursor& c    = a.synthCur;
+    Pattern&      p    = a.seq.patterns[a.track];
+    int           step = a.page * kPageSteps + c.row;
+    if (step >= p.length) return nullptr;
+    SeqNote& n = p.steps[step].notes[c.col / kSub];
+    return n.isNote() ? &n : nullptr;
+}
+
 void editSynth(App& a, Pattern& p, int fine, int coarse) {
     const int     t    = a.track;
     const Cursor& c    = a.synthCur;
@@ -142,7 +152,7 @@ void editSynth(App& a, Pattern& p, int fine, int coarse) {
         n.vel        = uint8_t(std::clamp(n.vel + fine + coarse, 1, kMaxVel));
         a.lastVel[t] = n.vel;
         break;
-    case SUB_CMD: editFx(n, fine + coarse, 0, 0); return;
+    case SUB_CMD: editFx(n, fine, 0, 0); return; // up / down opens the list (see edit())
     case SUB_VAL: editFx(n, 0, fine, coarse); return;
     }
     preview(a, t, n.pitch, n.vel);
@@ -197,7 +207,7 @@ void drawDrumInfo(App& a, Pattern& p) {
         drawText(r, x + 16, y + 64, 2, help.substr(cut + 2), kDim);
     }
     y = kDrumRowY + 200;
-    const char* lines[] = {"A: PUT / PLAY", "A+PAD: VELOCITY", "B+LEFT/RIGHT: FX", "B+UP/DOWN: FX VALUE", "B+A: DELETE", "",
+    const char* lines[] = {"A: PUT / PLAY", "A+LEFT/RIGHT: VELOCITY", "A+UP/DOWN: FX LIST", "B+UP/DOWN: FX VALUE", "B+A: DELETE", "",
                            "RET ROLL   ARP ARPEGGIO", "KIL CUT    DLY DELAY", "CHA CHANCE", "12 TICKS = 1 STEP"};
     for (const char* l : lines) {
         drawText(r, x + 16, y, 2, l, kDim);
@@ -272,8 +282,22 @@ void move(App& a, int dx, int dy) {
     }
 }
 
+// The drum hit under the cursor, for the command list. Locked.
+SeqNote* drumNote(App& a) { return drumHit(a, a.seq.patterns[a.track]); }
+
 void edit(App& a, int fine, int coarse) {
     const int t = a.track;
+    // A + up / down on a note command opens the list of commands (M8 style).
+    if (coarse && !fine) {
+        if (!a.isDrum[t] && a.synthCur.col % kSub == SUB_CMD) {
+            openFxPopup(a, synthNote);
+            return;
+        }
+        if (a.isDrum[t] && a.drumCur.col >= 0) { // on a drum hit; left / right stays velocity
+            openFxPopup(a, drumNote);
+            return;
+        }
+    }
     AudioLock lock(a.audio);
     Pattern&  p = a.seq.patterns[t];
     if (!a.isDrum[t]) {
@@ -292,12 +316,21 @@ void edit(App& a, int fine, int coarse) {
     }
 }
 
-// B + D-pad on a drum hit: left / right picks the command, up / down its value.
+// B + D-pad on a drum hit: left / right opens the command list, up / down changes its value.
 void option(App& a, int fine, int coarse) {
     const int t = a.track;
     if (!a.isDrum[t]) return;
+    if (fine) {
+        bool hit;
+        {
+            AudioLock lock(a.audio);
+            hit = drumNote(a) != nullptr;
+        }
+        if (hit) openFxPopup(a, drumNote);
+        return;
+    }
     AudioLock lock(a.audio);
-    if (SeqNote* n = drumHit(a, a.seq.patterns[t])) editFx(*n, fine, 0, coarse);
+    if (SeqNote* n = drumHit(a, a.seq.patterns[t])) editFx(*n, 0, 0, coarse);
 }
 
 void enter(App& a) {

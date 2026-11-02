@@ -3,12 +3,14 @@
 #include <SDL.h>
 
 #include <atomic>
+#include <functional>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "drumkit.h"
 #include "generate.h"
+#include "groove.h"
 #include "sequencer.h"
 #include "synth.h"
 
@@ -79,6 +81,25 @@ struct Cursor {
     int col = 0;
 };
 
+struct App;
+
+// A list that pops up over the screen to pick one item (note commands, grooves,
+// files). While it is open it takes the D-pad, A and B: up / down move, left /
+// right page (or go up / into folders when `left` / `right` are set), A picks,
+// B closes. `pick` may leave it open (the file browser does).
+struct Popup {
+    bool                     open = false;
+    std::string              title;
+    std::vector<std::string> items;
+    std::vector<std::string> notes; // optional second column, same length as items
+    std::string              footer; // what the buttons do here
+    int                      sel = 0, top = 0;
+    std::function<void(App&, int)> pick;
+    std::function<void(App&, int)> moved; // optional: the selection changed
+    std::function<void(App&)>      cancel; // optional: B
+    std::function<void(App&, int)> left, right; // optional
+};
+
 struct App {
     SDL_Window*       window     = nullptr;
     SDL_Renderer*     renderer   = nullptr;
@@ -114,6 +135,20 @@ struct App {
     int       euclidRot[kTracks][kDrumPads] = {};
     Evolve    evolve[kTracks];
 
+    // Grooves (from grooves/*.agr at startup) and the one in use (-1 = none, swing applies).
+    std::vector<Groove> grooves;
+    int    groove         = -1;
+    float  grooveTiming   = 1.0f; // how much of the groove's timing to apply
+    float  grooveVelocity = 0.0f; // and of its accents
+
+    // Where the file browser starts (samples/ next to the app), and per-track
+    // copies of a kit once a pad has been given another sample from it.
+    std::string samplesDir;
+    Kit         ownKit[kTracks];
+    bool        usesOwnKit[kTracks] = {};
+
+    Popup popup;
+
     // One undo level per track; undo swaps, so pressing it again redoes.
     Pattern undo[kTracks];
     bool    hasUndo[kTracks] = {};
@@ -131,7 +166,8 @@ struct App {
     Cursor drumCur{0, 0}; // col -1 = row label (Euclid), 0..15 = steps
     Cursor instCur;
     Cursor modsCur; // col = block (AMP ENV, ENV 2, LFO 1, LFO 2), row within it
-    Cursor mixCur;  // col = track, row = VOLUME / EVOLVE / AMOUNT / MODE
+    Cursor mixCur;  // col = track, row = VOLUME / EVOLVE / AMOUNT / MODE / GROOVE
+    int    mixGrooveCol = 0; // on the GROOVE row: name, timing, velocity
     float  meter[kTracks] = {}; // shown track levels, falling slowly
 
     bool   held[BTN_COUNT]     = {};
@@ -173,6 +209,10 @@ void        loadPreset(App& a, int t, int index);
 void        loadKit(App& a, int t, int index);
 void        setTrackType(App& a, int t, bool drum);
 void        regenerate(App& a, int t);        // locked; rebuilds track t from its generator settings
+void        applyGroove(App& a);              // locked; sends the groove (or none) to the sequencer
+std::string grooveName(const App& a);
+const Kit*  trackKit(const App& a, int t);    // the kit a drum track plays (shared or its own copy)
+bool        setPadSample(App& a, int t, int pad, const std::string& path); // loads a WAV onto one pad
 void        mutate(App& a, int t, uint32_t seed, float amount); // locked
 void        evolveOnLoop(App& a, int t);      // audio thread (the device lock is held there)
 void        newSeed(App& a);                  // current track: new seed, regenerate (with undo and a message)
@@ -196,6 +236,14 @@ struct ScreenOps {
 };
 extern const ScreenOps kSeqScreen, kPatternScreen, kInstrScreen, kModsScreen, kMixerScreen;
 const ScreenOps& screenOps(Screen s);
+
+// List popup (ui_popup.cpp)
+void openPopup(App& a, Popup p);
+void drawPopup(App& a);
+bool popupPress(App& a, Btn b); // true when the popup used the button
+void openFxPopup(App& a, SeqNote* (*target)(App&)); // note command list for the note `target` finds
+void openGroovePopup(App& a);
+void openSampleBrowser(App& a, int t, int pad);
 
 // GENERATE popup (ui_gen.cpp), drawn over the current screen while a.genOpen.
 void drawGenMenu(App& a);

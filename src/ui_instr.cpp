@@ -13,6 +13,7 @@
 namespace {
 
 enum { ROW_TYPE, ROW_SOURCE, ROW_FIRST }; // TYPE, PRESET / KIT, then parameters or pads
+constexpr int kPadFields = 5; // SAMPLE, PITCH, START, END, VOL
 
 constexpr int kTop     = 72;
 constexpr int kRightX  = 640;
@@ -24,7 +25,7 @@ int rowCount(const App& a) { return ROW_FIRST + (a.isDrum[a.track] ? kDrumPads :
 Cursor& cursor(App& a) {
     Cursor& c = a.instCur;
     c.row     = std::clamp(c.row, 0, rowCount(a) - 1);
-    c.col     = a.isDrum[a.track] && c.row >= ROW_FIRST ? std::clamp(c.col, 0, 3) : 0;
+    c.col     = a.isDrum[a.track] && c.row >= ROW_FIRST ? std::clamp(c.col, 0, kPadFields - 1) : 0;
     return c;
 }
 
@@ -108,7 +109,7 @@ constexpr int kPadRowH = 52;
 const char*   kPadCols[4] = {"PITCH", "START", "END", "VOL"};
 constexpr int kPadColX[4] = {230, 330, 430, 530};
 
-std::string padValue(const DrumKit::PadSettings& s, int col) {
+std::string padValue(const DrumKit::PadSettings& s, int col) { // col 0..3 = PITCH..VOL
     switch (col) {
     case 0:  return fmt("%+d", s.pitch);
     case 1:  return fmt("%d%%", int(s.start * 100.0f + 0.5f));
@@ -150,10 +151,11 @@ void drawDrums(App& a, const Cursor& c) {
         std::copy(a.drums[t].pads, a.drums[t].pads + kDrumPads, pads);
     }
     drawField(r, 40, kTop, "TYPE", "DRUM", c.row == ROW_TYPE, 230);
-    std::string kit = a.kits.empty() ? "-" : a.kits[a.kit[t]].name;
+    const Kit*  k   = trackKit(a, t);
+    std::string kit = k ? k->name + (a.usesOwnKit[t] ? "*" : "") : "-";
     drawField(r, 40, kTop + 34, "KIT", kit, c.row == ROW_SOURCE, 230);
 
-    drawText(r, 40, kPadRowY - 26, 2, "PAD", kDim);
+    drawText(r, 40, kPadRowY - 26, 2, "PAD SAMPLE", kDim);
     for (int col = 0; col < 4; ++col) drawText(r, kPadColX[col], kPadRowY - 26, 2, kPadCols[col], kDim);
     for (int pad = 0; pad < kDrumPads; ++pad) {
         int  row    = ROW_FIRST + pad;
@@ -161,10 +163,12 @@ void drawDrums(App& a, const Cursor& c) {
         bool curRow = c.row == row;
         fillRect(r, 24, y, 600, kPadRowH - 6, curRow ? kPanel2 : kPanel);
         std::string name = fmt("%d %s", pad + 1, padName(a, t, pad).c_str());
-        if (name.size() > 13) name.resize(13);
-        drawText(r, 36, y + 15, 2, name, curRow ? kText : kDim);
+        if (name.size() > 14) name.resize(14);
+        bool onName = curRow && c.col == 0;
+        if (onName) fillRect(r, 28, y + 6, 186, kPadRowH - 18, kCursorBg);
+        drawText(r, 36, y + 15, 2, name, onName ? kAccent : curRow ? kText : kDim);
         for (int col = 0; col < 4; ++col) {
-            bool        cur = curRow && c.col == col;
+            bool        cur = curRow && c.col == col + 1;
             std::string v   = padValue(pads[pad], col);
             if (cur) fillRect(r, kPadColX[col] - 8, y + 6, 88, kPadRowH - 18, kCursorBg);
             drawText(r, kPadColX[col], y + 15, 2, v, cur ? kAccent : kText);
@@ -175,8 +179,8 @@ void drawDrums(App& a, const Cursor& c) {
     int pad = c.row >= ROW_FIRST ? c.row - ROW_FIRST : 0;
     fillRect(r, kRightX, kTop - 6, kRightW, 300, kPanel);
     drawText(r, kRightX + 12, kTop + 4, 2, fmt("PAD %d %s", pad + 1, padName(a, t, pad).c_str()), kDim);
-    if (!a.kits.empty()) {
-        const Sample& smp = a.kits[a.kit[t]].pads[pad];
+    if (k) {
+        const Sample& smp = k->pads[pad];
         drawWave(a, smp, pads[pad], kRightX + 8, kTop + 30, kRightW - 16, 200);
         if (!smp.data.empty())
             drawText(r, kRightX + 12, kTop + 246, 2,
@@ -186,7 +190,8 @@ void drawDrums(App& a, const Cursor& c) {
     drawText(r, kRightX + 12, y, 2, "A: PLAY PAD", kDim);
     drawText(r, kRightX + 12, y + 24, 2, "A+UP/DN: COARSE", kDim);
     drawText(r, kRightX + 12, y + 48, 2, "B+A: RESET", kDim);
-    drawText(r, kRightX + 12, y + 72, 2, "SAMPLES/KITS/<KIT>/*.WAV", kDim);
+    drawText(r, kRightX + 12, y + 72, 2, "ON SAMPLE: A+PAD = BROWSE", kAccent);
+    drawText(r, kRightX + 12, y + 96, 2, "KIT* = PADS CHANGED HERE", kDim);
 }
 
 void editDrums(App& a, const Cursor& c, int fine, int coarse) {
@@ -195,9 +200,13 @@ void editDrums(App& a, const Cursor& c, int fine, int coarse) {
         loadKit(a, t, a.kit[t] + fine + coarse);
         return;
     }
+    if (c.col == 0) { // the sample: pick another file
+        openSampleBrowser(a, t, c.row - ROW_FIRST);
+        return;
+    }
     AudioLock lock(a.audio);
     DrumKit::PadSettings& s = a.drums[t].pads[c.row - ROW_FIRST];
-    switch (c.col) {
+    switch (c.col - 1) {
     case 0: s.pitch = std::clamp(s.pitch + fine + coarse * 12, -24, 24); break;
     case 1: s.start = std::clamp(s.start + fine * 0.01f + coarse * 0.1f, 0.0f, s.end - 0.01f); break;
     case 2: s.end = std::clamp(s.end + fine * 0.01f + coarse * 0.1f, s.start + 0.01f, 1.0f); break;
@@ -216,7 +225,7 @@ void draw(App& a) {
 void move(App& a, int dx, int dy) {
     Cursor& c = cursor(a);
     c.row     = std::clamp(c.row + dy, 0, rowCount(a) - 1);
-    if (a.isDrum[a.track] && c.row >= ROW_FIRST) c.col = std::clamp(c.col + dx, 0, 3);
+    if (a.isDrum[a.track] && c.row >= ROW_FIRST) c.col = std::clamp(c.col + dx, 0, kPadFields - 1);
 }
 
 void edit(App& a, int fine, int coarse) {

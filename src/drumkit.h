@@ -16,11 +16,16 @@ struct Sample {
 struct Kit {
     static constexpr int kPads = 8;
     std::string name;
+    std::string dir; // the folder it was loaded from
     Sample      pads[kPads];
 };
 
 // Reads a PCM (8/16/24/32-bit) or float WAV and mixes it down to mono.
 bool loadWav(const std::string& path, Sample& out, std::string& error);
+
+// "01-Kick_808.wav" -> "KICK_808", the name a sample shows on its pad.
+std::string sampleName(const std::string& path);
+bool        isWavFile(const std::string& path);
 
 // Each subfolder of `dir` is a kit; its WAV files, sorted by name, fill pads 1-8.
 std::vector<Kit> loadKits(const std::string& dir);

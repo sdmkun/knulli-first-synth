@@ -37,6 +37,9 @@ bool isWav(const fs::path& p) {
 
 } // namespace
 
+std::string sampleName(const std::string& path) { return displayName(fs::u8path(path)); }
+bool        isWavFile(const std::string& path) { return isWav(fs::u8path(path)); }
+
 bool loadWav(const std::string& path, Sample& out, std::string& error) {
     std::ifstream f(fs::u8path(path), std::ios::binary);
     if (!f) { error = "cannot open"; return false; }
@@ -115,6 +118,7 @@ std::vector<Kit> loadKits(const std::string& dir) {
 
         Kit kit;
         kit.name   = displayName(folder);
+        kit.dir    = folder.u8string();
         int loaded = 0;
         for (const fs::path& file : files) {
             if (loaded == Kit::kPads) break;

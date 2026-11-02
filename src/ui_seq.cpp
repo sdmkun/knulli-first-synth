@@ -8,7 +8,7 @@
 
 namespace {
 
-enum { F_BPM, F_KEY, F_SCALE, F_SWING, F_COUNT };
+enum { F_BPM, F_KEY, F_SCALE, F_SWING, F_GROOVE, F_COUNT };
 
 constexpr int kGridX  = 76;
 constexpr int kColW   = 236;
@@ -49,11 +49,16 @@ void draw(App& a) {
     const Cursor& c = a.seqCur;
 
     // Song-wide fields.
+    std::string groove = grooveName(a);
+    if (groove.size() > 34) groove.resize(34);
     const std::string values[F_COUNT] = {fmt("%d", int(a.seq.bpm() + 0.5f)), kNoteNames[a.root],
-                                         kScales[a.scale].name, fmt("%d%%", int(a.seq.swing() * 100.0f + 0.5f))};
-    const char*       labels[F_COUNT] = {"BPM", "KEY", "SCALE", "SWING"};
-    const int         fx[F_COUNT]     = {24, 220, 400, 640};
-    for (int f = 0; f < F_COUNT; ++f) drawField(r, fx[f], 70, labels[f], values[f], c.row < 0 && c.col == f, fx[f] + 76);
+                                         kScales[a.scale].name,
+                                         a.groove >= 0 ? "-" : fmt("%d%%", int(a.seq.swing() * 100.0f + 0.5f)),
+                                         groove};
+    const char*       labels[F_COUNT] = {"BPM", "KEY", "SCALE", "SWING", "GRV"};
+    const int         fx[F_COUNT]     = {24, 140, 240, 410, 548};
+    const int         vx[F_COUNT]     = {72, 188, 312, 482, 596};
+    for (int f = 0; f < F_COUNT; ++f) drawField(r, fx[f], 70, labels[f], values[f], c.row < 0 && c.col == f, vx[f]);
 
     // Track titles.
     for (int t = 0; t < kTracks; ++t) {
@@ -113,13 +118,26 @@ void edit(App& a, int fine, int coarse) {
     case F_KEY:   a.root = (a.root + fine + coarse + 12) % 12; break;
     case F_SCALE: a.scale = (a.scale + fine + coarse + kScaleCount) % kScaleCount; break;
     case F_SWING: a.seq.setSwing(a.seq.swing() + fine * 0.01f + coarse * 0.05f); break;
+    case F_GROOVE: {
+        const int n = int(a.grooves.size()) + 1; // NONE, then the grooves
+        a.groove    = (a.groove + 1 + fine + coarse * 10 + n * 10) % n - 1;
+        if (a.groove >= 0) {
+            a.grooveTiming   = a.grooves[a.groove].timing;
+            a.grooveVelocity = a.grooves[a.groove].velocity;
+        }
+        applyGroove(a);
+        break;
+    }
     }
 }
 
 // A on a cell opens that track's pattern at that step.
 void enter(App& a) {
     const Cursor& c = a.seqCur;
-    if (c.row < 0) return;
+    if (c.row < 0) {
+        if (c.col == F_GROOVE) openGroovePopup(a);
+        return;
+    }
     a.track          = c.col;
     a.screen         = SCR_PATTERN;
     a.synthCur.row   = c.row;
@@ -132,6 +150,10 @@ void clear(App& a) {
     if (c.row < 0) {
         AudioLock lock(a.audio);
         if (c.col == F_SWING) a.seq.setSwing(0.5f);
+        if (c.col == F_GROOVE) {
+            a.groove = -1;
+            applyGroove(a);
+        }
         return;
     }
     int step = a.page * kPageSteps + c.row;

@@ -1,6 +1,6 @@
 # 引き継ぎメモ（実装状況と今後の予定）
 
-最終更新: 2026-11-02（EVOLVE / MIXER / スウィングを足した時点）
+最終更新: 2026-11-02（一覧ポップアップ・グルーヴ・サンプルのファイルブラウザを足した時点）
 
 次のセッションはこのファイルと `README.md`（操作・構成の説明）、`docs/requirements.md`（要件）を読めば再開できるように書いています。
 
@@ -9,7 +9,8 @@
 TrimUI Brick（Knulli）向けの 4 トラックのグルーブボックス。M8 風の画面遷移で、打ち込みはトラッカー式の手入力と生成（ジェネラティブ）の組み合わせ。
 
 - PC（Linux、xvfb）ではビルドと画面の操作、音の出力を確認済み
-- **実機で未確認のもの**: 2026-10-31 以降の変更すべて（M8 風の画面、OFF 方式、ベロシティ、ノートコマンド、新シンセ、MODS 画面、EVOLVE、MIXER、スウィング）。特に DSP 負荷を見てもらう必要がある
+- **実機での確認（2026-11-02 そまく）**: EVOLVE / MIXER / スウィングまでの版で DSP 20% 以下、ピーク 30% 以下
+- **実機で未確認のもの**: 一覧ポップアップ、グルーヴ、ファイルブラウザ
 - 実機で確認済みなのは、旧 UI（十字型のパッド配置）での 4 トラック録音・再生、WAV ドラム、DSP 負荷（下の 5 章）まで
 
 ## 2. コミットの流れ
@@ -26,7 +27,8 @@ TrimUI Brick（Knulli）向けの 4 トラックのグルーブボックス。M8
 | 8286940 | LEN をやめて「次のノートか OFF まで鳴る」方式に。ベロシティ 8 段階 |
 | 22af136 | 1 ステップ 12 ティック、ノートコマンド（RET / ARP / KIL / DLY / CHA）、GENERATE をメニュー化、ドラムは B + A で消す |
 | da2869a | シンセ強化（ウェーブテーブル 7 種、POS、SUB、NOISE、DRIVE、フィルター 4 種、ADSR、ENV 2、LFO × 2）と MODS 画面 |
-| (EVOLVE のコミット) | EVOLVE（N 周ごとに自動ミューテート、VARY / DRIFT）、MIXER 画面（音量とレベルメーター、SEQ の下）、スウィング（SEQ の SWING 欄） |
+| eff698f | EVOLVE（N 周ごとに自動ミューテート、VARY / DRIFT）、MIXER 画面（音量とレベルメーター、SEQ の下）、スウィング（SEQ の SWING 欄） |
+| (この次のコミット) | 一覧ポップアップ（FX コマンドを A + 上下で選ぶ）、グルーヴ（.agr の読み込みと選択、MIXER で TIMING / VELOCITY）、サンプルのファイルブラウザ（INSTR のパッドの SAMPLE） |
 
 ## 3. コードの地図
 
@@ -40,6 +42,8 @@ TrimUI Brick（Knulli）向けの 4 トラックのグルーブボックス。M8
 | `src/ui_gen.cpp` | GENERATE メニュー（X で開く） |
 | `src/ui_instr.cpp` | INSTR：シンセのパラメータと波形表示、ドラムのキットとパッド設定 |
 | `src/ui_mods.cpp` | MODS：AMP ENV / ENV 2 / LFO 1 / LFO 2 の 4 枠 |
+| `src/ui_popup.cpp` | 一覧のポップアップ（`App::popup`）。ノートコマンド、グルーヴ、サンプルのファイルブラウザの 3 つの一覧を作る関数もここ |
+| `src/groove.*` | .agr の読み込み。XML 版はタグを文字列検索、バイナリ版（先頭 AB 1E）は "MidiNoteEvent" の後ろの 25 バイトのレコード（time double / duration double / velocity float / off velocity float / enabled byte）と、末尾近くの FF 00 00 00 + base + 4 つの float（quantize / timing / random / velocity）を読む |
 | `src/ui_mixer.cpp` | MIXER：4 トラックの音量フェーダーとレベルメーター、EVOLVE の設定（EVOLVE / AMOUNT / MODE） |
 | `src/sequencer.*` | オーディオスレッドで動くシーケンサー。ティック単位で発音、列ごとの状態（鳴っているキー、DLY 待ち、RET、ARP、KIL）。マスターのソフトクリップ |
 | `src/generate.*` | ドラム生成（スタイル表、ユークリッド、ゴースト、フィル、ロール）、メロディ生成（スケール内のランダムウォーク、OFF で長さ）、ミューテート |
@@ -59,6 +63,9 @@ TrimUI Brick（Knulli）向けの 4 トラックのグルーブボックス。M8
 - 生成は同じ設定・同じシードなら同じ結果（xorshift）。アンドゥはトラックごとに 1 段で、押すたびに入れ替わる（リドゥを兼ねる）
 - EVOLVE はオーディオスレッドで動く：`Sequencer::onLoop`（パターンが頭に戻ったとき、そのステップを鳴らす前に呼ぶ）から `evolveOnLoop()`。ミューテートは確保なしで軽いのでそのまま呼んでいる。VARY は `Evolve::last`（自分が最後に書いた形）と比べて、違えばユーザーが変えたとみなして base を取り直す
 - スウィングはティックの長さで作る（`samplesPerTick()` が直前に鳴らしたティックのステップの偶奇で 2×swing / 2×(1−swing) 倍）。偶奇は曲の頭からの通しのステップで数える
+- ポップアップが開いている間は、十字キー・A・B・L2/R2 をポップアップが取る（`popupPress`）。コールバックの中でポップアップの中身を書き換えることがあるので、呼ぶときは std::function をコピーしてから呼ぶ。ファイルブラウザは状態を shared_ptr で持ち、項目だけ入れ替える
+- グルーヴ：ステップごとの開始位置（ステップ単位）とゲインの表を `Sequencer::setGroove` で渡す。`samplesPerTick()` がそのステップの長さを使う（スウィングより優先）。ゲインは `trigger()` で掛ける
+- パッドのサンプルを差し替えると、そのトラック用の `App::ownKit` にキットをコピーしてから入れ替える（共有のキットは変えない）。差し替えはオーディオロックの中で allOff してから
 - トラックの音量 `Sequencer::volume` とレベル `Sequencer::level`（UI が読んで 0 に戻す）は `process()` で掛ける・測る
 - エンベロープの減衰は目標値に近づいたら値をそろえる（非正規化数で遅くなるのを防ぐ。これを入れる前は 1 プリセットで処理が 10 倍になった）
 
@@ -72,7 +79,7 @@ TrimUI Brick（Knulli）向けの 4 トラックのグルーブボックス。M8
   - `SDL_AUDIODRIVER=disk SDL_DISKAUDIOFILE=out.raw KSYNTH_WINDOWED=1` で起動し、`xvfb-run` + `xdotool` でキーを送り、`import -window root` でスクショ
   - PC キーボードの割り当て: 矢印 = 十字、K = A、L = B、J = X、I = Y、Q / E = L1 / R1、Z / C = L2 / R2、Tab = SELECT、Enter = START、T = L3、R = R3、Esc = 終了
   - `xdotool keydown` の直後の 1 打目が落ちることがあるので、修飾キーを押したあとは 0.15 秒ほど待つ
-- 同期: Claude のクラウド環境で編集して GitHub（`sdmkun/knulli-first-synth`、main）に push。PC 側のリポジトリには git bundle を渡して `git fetch` → `git merge --ff-only` でそろえる（PC 側のシェルからは GitHub に届かないため）
+- 同期: Claude のクラウド環境で編集して GitHub（`sdmkun/knulli-first-synth`、main）に push（そまくの OK あり。PR は不要）。PC 側のリポジトリには git bundle を渡して `git fetch` → `git merge --ff-only` でそろえる（PC 側のシェルからは GitHub に届かないため）
 - コミットの作者メールは `5726167+sdmkun@users.noreply.github.com`（gmail のままだと push が弾かれる）
 
 ## 5. 実機で測った数字（旧 UI 時点）
@@ -82,6 +89,10 @@ TrimUI Brick（Knulli）向けの 4 トラックのグルーブボックス。M8
 - 新シンセ（da2869a）は x86 の計測で旧シンセと同程度（8 ボイスで実時間の 0.4〜0.7%）。実機は未計測
 
 ## 6. そまくの好み・決めたこと
+
+- main に直接 push してよい（2026-11-02）
+- ノートコマンドが増えても 1 つずつ送らずに済むよう、M8 のように一覧から選びたい
+- グルーヴは Ableton の .agr（そまくの PC の `E:\Downloads\Groove`、259 個）を使う。リポジトリの `grooves/` にコピー済み（git には入れない）
 
 - L / R がオクターブである必要はない。要件の md は細部が適当なところがある
 - 遅延はそれほど気にしなくていい。ただし処理落ち（音切れ）はだめ
@@ -94,7 +105,7 @@ TrimUI Brick（Knulli）向けの 4 トラックのグルーブボックス。M8
 
 1. **実機で確認**（最優先）: 新しい画面と操作、ノートコマンド、新シンセ、MODS 画面。DSP 負荷とたまのピーク、音切れがないか
 2. 実機のフィードバックを直す
-3. プロジェクトとプリセットの保存 / 読み込み（JSON）。EVOLVE・音量・スウィングも入れる
+3. プロジェクトとプリセットの保存 / 読み込み（JSON）。EVOLVE・音量・スウィング・グルーヴ・差し替えたパッドのサンプルも入れる
 4. ノートコマンドの追加（グライド、音量のスライドなど）、メロディ生成で ARP を使う
 5. EVOLVE の発展：周ごとに生成し直す（NEW SEED）モード、変える範囲をパートで選ぶ（例：キックは固定）
 6. MIDI クロック受信、リバーブ、サンプル録音とグラニュラー（GrainBrick 方向）

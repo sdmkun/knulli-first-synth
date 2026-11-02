@@ -9,14 +9,16 @@
 
 namespace {
 
-enum { R_VOLUME, R_EVOLVE, R_AMOUNT, R_MODE, R_COUNT };
+enum { R_VOLUME, R_EVOLVE, R_AMOUNT, R_MODE, R_GROOVE, R_COUNT }; // R_GROOVE spans all tracks
 
 constexpr int kGridX   = 76;
 constexpr int kColW    = 236;
 constexpr int kTitleY  = 70;
 constexpr int kFaderY  = 136;
-constexpr int kFaderH  = 270;
-constexpr int kFieldY  = 450;
+constexpr int kFaderH  = 240;
+constexpr int kFieldY  = 420;
+constexpr int kGrooveY = 570;
+enum { G_NAME, G_TIMING, G_VEL, G_COUNT }; // fields of the groove row
 constexpr int kFieldH  = 40;
 
 Cursor& cursor(App& a) {
@@ -61,7 +63,7 @@ void draw(App& a) {
         a.meter[t] = std::max(meterNorm(peak[t]), a.meter[t] - 0.007f);
 
         const int  x   = kGridX + t * kColW;
-        const bool sel = t == c.col;
+        const bool sel = t == c.col && c.row != R_GROOVE;
         fillRect(r, x, kTitleY, kColW - 6, 48, sel ? kPanel2 : kPanel);
         if (sel) fillRect(r, x, kTitleY + 46, kColW - 6, 2, kAccent);
         std::string name = fmt("%d %s", t + 1, trackName(a, t).c_str());
@@ -90,25 +92,34 @@ void draw(App& a) {
                          fsel ? kAccent : kText);
 
         // EVOLVE settings.
-        const std::string values[R_COUNT] = {"", everyText(kEvolveEvery[evo[t].every]),
+        const std::string values[R_MODE + 1] = {"", everyText(kEvolveEvery[evo[t].every]),
                                              fmt("%d%%", int(std::lround(evo[t].amount * 100.0f))),
                                              evo[t].vary ? "VARY" : "DRIFT"};
-        const char*       labels[R_COUNT] = {"", "EVOLVE", "AMOUNT", "MODE"};
-        for (int row = R_EVOLVE; row < R_COUNT; ++row)
+        const char*       labels[R_MODE + 1] = {"", "EVOLVE", "AMOUNT", "MODE"};
+        for (int row = R_EVOLVE; row <= R_MODE; ++row)
             drawField(r, x + 12, kFieldY + (row - 1) * kFieldH, labels[row], values[row], sel && c.row == row,
                       x + 100);
         int every = kEvolveEvery[evo[t].every];
         if (every > 1 && playing) // how far it is to the next change
             drawBar(r, x + 12, kFieldY + 3 * kFieldH + 2, kColW - 30, 6, float(evo[t].count) / every, kPlayCol);
     }
-    drawText(r, 24, kFieldY + 3 * kFieldH + 22, 2, "EVOLVE: MUTATE THE TRACK EVERY N LOOPS WHILE IT PLAYS", kDim);
-    drawText(r, 24, kFieldY + 3 * kFieldH + 44, 2,
-             "VARY: AROUND YOUR PATTERN (AN EDIT BECOMES THE BASE)  DRIFT: FURTHER EACH TIME", kDim);
+    // Groove (song-wide): which one, and how much of its timing and accents.
+    fillRect(r, 16, kGrooveY - 8, kW - 32, 34, kPanel);
+    std::string name = grooveName(a);
+    if (name.size() > 30) name.resize(30);
+    const bool grow = c.row == R_GROOVE, on = a.groove >= 0;
+    drawField(r, 28, kGrooveY, "GROOVE", name, grow && a.mixGrooveCol == G_NAME, 120);
+    drawField(r, 530, kGrooveY, "TIMING", on ? fmt("%d%%", int(std::lround(a.grooveTiming * 100.0f))) : "-",
+              grow && a.mixGrooveCol == G_TIMING, 618);
+    drawField(r, 720, kGrooveY, "VELOCITY", on ? fmt("%d%%", int(std::lround(a.grooveVelocity * 100.0f))) : "-",
+              grow && a.mixGrooveCol == G_VEL, 832);
+    drawText(r, 24, kGrooveY + 36, 2, "EVOLVE: MUTATE EVERY N LOOPS.  VARY: AROUND YOUR PATTERN  DRIFT: AWAY", kDim);
 }
 
 void move(App& a, int dx, int dy) {
     Cursor& c = cursor(a);
-    a.track   = std::clamp(a.track + dx, 0, kTracks - 1);
+    if (c.row == R_GROOVE) a.mixGrooveCol = std::clamp(a.mixGrooveCol + dx, 0, G_COUNT - 1);
+    else a.track = std::clamp(a.track + dx, 0, kTracks - 1);
     c.row += dy;
     cursor(a);
 }
@@ -129,11 +140,29 @@ void edit(App& a, int fine, int coarse) {
         break;
     case R_AMOUNT: e.amount = std::clamp(e.amount + fine * 0.01f + coarse * 0.1f, 0.0f, 1.0f); break;
     case R_MODE:   e.vary = !e.vary, e.hasBase = false; break;
+    case R_GROOVE:
+        if (a.mixGrooveCol == G_NAME) {
+            const int n = int(a.grooves.size()) + 1;
+            a.groove    = (a.groove + 1 + fine + coarse * 10 + n * 10) % n - 1;
+            if (a.groove >= 0) {
+                a.grooveTiming   = a.grooves[a.groove].timing;
+                a.grooveVelocity = a.grooves[a.groove].velocity;
+            }
+        } else {
+            float& v = a.mixGrooveCol == G_TIMING ? a.grooveTiming : a.grooveVelocity;
+            v        = std::clamp(v + fine * 0.01f + coarse * 0.1f, 0.0f, 1.0f);
+        }
+        applyGroove(a);
+        break;
     }
 }
 
 void enter(App& a) {
     const Cursor& c = cursor(a);
+    if (c.row == R_GROOVE) {
+        if (a.mixGrooveCol == G_NAME) openGroovePopup(a);
+        return;
+    }
     AudioLock lock(a.audio);
     if (c.row == R_MODE) {
         a.evolve[c.col].vary    = !a.evolve[c.col].vary;
@@ -150,6 +179,12 @@ void clear(App& a) {
     case R_EVOLVE: e.every = 0, e.count = 0; break;
     case R_AMOUNT: e.amount = Evolve{}.amount; break;
     case R_MODE:   e.vary = Evolve{}.vary, e.hasBase = false; break;
+    case R_GROOVE:
+        if (a.mixGrooveCol == G_NAME) a.groove = -1;
+        else if (a.groove >= 0 && a.mixGrooveCol == G_TIMING) a.grooveTiming = a.grooves[a.groove].timing;
+        else if (a.groove >= 0) a.grooveVelocity = a.grooves[a.groove].velocity;
+        applyGroove(a);
+        break;
     }
 }
 

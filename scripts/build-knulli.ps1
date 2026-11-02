@@ -21,6 +21,9 @@ New-Item -ItemType Directory -Force $app | Out-Null
 Copy-Item (Join-Path $root 'build\knulli\ksynth') $app -Force
 # Bundled drum kits; your own kits can be added next to them on the device.
 Copy-Item (Join-Path $root 'samples') $app -Recurse -Force
+# Grooves (.agr) are not in git; put them in grooves\ at the repo root to ship them.
+$grooves = Join-Path $root 'grooves'
+if (Test-Path $grooves) { Copy-Item $grooves $app -Recurse -Force }
 Copy-Item (Join-Path $root 'package\KnulliFirstSynth.sh') $dist -Force
 Copy-Item (Join-Path $root 'package\KnulliFirstSynth.sh.keys') $dist -Force
 

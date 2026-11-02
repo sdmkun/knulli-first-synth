@@ -89,6 +89,12 @@ public:
     void  setSwing(float s);
     float swing() const { return swing_; }
 
+    // Groove: where each of `steps` steps starts (start[steps] closes the loop, so
+    // start[i + 1] - start[i] is step i's length in steps) and a gain per step.
+    // Counted from the song start like swing, which it replaces. steps = 0 turns it off.
+    static constexpr int kMaxGrooveSteps = 64;
+    void setGroove(const float* start, const float* gain, int steps);
+
     // Muted tracks release their notes and stop firing. A solo track mutes all the others.
     bool audible(int track) const { return solo >= 0 ? track == solo : !mute[track]; }
 
@@ -133,6 +139,9 @@ private:
     int    sampleRate_ = 48000;
     float  bpm_        = 120.0f;
     float  swing_      = 0.5f;
+    int    grooveSteps_ = 0;
+    float  grooveStart_[kMaxGrooveSteps + 1] = {};
+    float  grooveGain_[kMaxGrooveSteps]      = {};
     bool   playing_    = false;
     double untilTick_  = 0.0; // samples until the next tick fires
     long   tick_       = -1;  // ticks fired since start

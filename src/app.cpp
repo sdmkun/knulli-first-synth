@@ -94,14 +94,62 @@ ScaleInfo scaleInfo(const App& a) {
 std::string noteName(int m) { return std::string(kNoteNames[m % 12]) + std::to_string(m / 12 - 1); }
 
 std::string trackName(const App& a, int t) {
-    if (a.isDrum[t]) return "KIT " + a.kits[a.kit[t]].name;
+    if (a.isDrum[t]) {
+        const Kit* k = trackKit(a, t);
+        return "KIT " + (k ? k->name : std::string("-")) + (a.usesOwnKit[t] ? "*" : "");
+    }
     return std::string(kPresets[a.preset[t]].name) + (a.edited[t] ? "*" : "");
 }
 
+const Kit* trackKit(const App& a, int t) {
+    if (a.usesOwnKit[t]) return &a.ownKit[t];
+    return a.kits.empty() ? nullptr : &a.kits[a.kit[t]];
+}
+
 std::string padName(const App& a, int t, int pad) {
-    if (a.kits.empty()) return "-";
-    const std::string& n = a.kits[a.kit[t]].pads[pad].name;
+    const Kit* k = trackKit(a, t);
+    if (!k) return "-";
+    const std::string& n = k->pads[pad].name;
     return n.empty() ? "-" : n;
+}
+
+bool setPadSample(App& a, int t, int pad, const std::string& path) {
+    Sample      smp;
+    std::string error;
+    if (!loadWav(path, smp, error)) {
+        a.message = "CANNOT LOAD: " + fontSafe(error);
+        return false;
+    }
+    smp.name = fontSafe(sampleName(path));
+    // The shared kits stay as they are; the track gets its own copy to change.
+    Kit copy;
+    bool fresh = !a.usesOwnKit[t];
+    if (fresh && !a.kits.empty()) copy = a.kits[a.kit[t]];
+    AudioLock lock(a.audio);
+    a.drums[t].allOff(); // no voice may keep reading a sample that is replaced
+    if (fresh) {
+        a.ownKit[t]     = std::move(copy);
+        a.usesOwnKit[t] = true;
+    }
+    a.ownKit[t].pads[pad] = std::move(smp);
+    a.drums[t].setKit(&a.ownKit[t]);
+    return true;
+}
+
+std::string grooveName(const App& a) {
+    return a.groove >= 0 && a.groove < int(a.grooves.size()) ? a.grooves[a.groove].name : "NONE";
+}
+
+void applyGroove(App& a) {
+    if (a.groove < 0 || a.groove >= int(a.grooves.size())) {
+        a.seq.setGroove(nullptr, nullptr, 0);
+        return;
+    }
+    const Groove& g = a.grooves[a.groove];
+    float start[Groove::kMaxSteps + 1], gain[Groove::kMaxSteps];
+    for (int s = 0; s <= g.steps; ++s) start[s] = s + a.grooveTiming * (g.start[s] - s);
+    for (int s = 0; s < g.steps; ++s) gain[s] = 1.0f - a.grooveVelocity * (1.0f - g.vel[s]);
+    a.seq.setGroove(start, gain, g.steps);
 }
 
 Pattern& pattern(App& a, int t) { return a.seq.patterns[t]; }
@@ -136,6 +184,7 @@ void loadKit(App& a, int t, int index) {
     int n    = int(a.kits.size());
     a.kit[t] = (index % n + n) % n;
     AudioLock lock(a.audio);
+    a.usesOwnKit[t] = false; // picking a kit drops the track's own pad samples
     a.drums[t].setKit(&a.kits[a.kit[t]]);
 }
 

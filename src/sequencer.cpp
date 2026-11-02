@@ -111,10 +111,24 @@ void Sequencer::init(int sampleRate) {
 
 // The tick just fired decides: ticks of an even step stretch by 2 * swing, those
 // of an odd step shrink by the same amount, so each pair of steps keeps its length.
+// A groove sets each step's length from its table instead.
 double Sequencer::samplesPerTick() const {
     const double straight = sampleRate_ * 60.0 / bpm_ / 4.0 / kTicksPerStep;
-    const bool   odd      = tick_ >= 0 && (tick_ / kTicksPerStep) % 2 == 1;
-    return straight * 2.0 * (odd ? 1.0 - swing_ : swing_);
+    const long   step     = tick_ >= 0 ? tick_ / kTicksPerStep : 0;
+    if (grooveSteps_ > 0) {
+        const int g = int(step % grooveSteps_);
+        return straight * (grooveStart_[g + 1] - grooveStart_[g]);
+    }
+    return straight * 2.0 * (step % 2 == 1 ? 1.0 - swing_ : swing_);
+}
+
+void Sequencer::setGroove(const float* start, const float* gain, int steps) {
+    grooveSteps_ = std::clamp(steps, 0, kMaxGrooveSteps);
+    for (int i = 0; i < grooveSteps_; ++i) {
+        grooveGain_[i]  = gain[i];
+        grooveStart_[i] = start[i];
+    }
+    if (grooveSteps_) grooveStart_[grooveSteps_] = start[grooveSteps_];
 }
 
 void Sequencer::setBpm(float bpm) { bpm_ = std::clamp(bpm, 40.0f, 240.0f); }
@@ -186,6 +200,7 @@ void Sequencer::trigger(Instrument& inst, int track, Column& col, const SeqNote&
     col.key  = newKey(track);
     col.note = n.pitch;
     col.gain = velocityGain(n.vel);
+    if (grooveSteps_ > 0) col.gain *= grooveGain_[(tick_ / kTicksPerStep) % grooveSteps_];
     inst.noteOn(col.key, col.note, col.gain);
     const int tickInStep = int(tick_ % kTicksPerStep);
     switch (n.fx) {

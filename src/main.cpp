@@ -71,6 +71,7 @@ void togglePlay(App& a) {
 }
 
 void onSelectCombo(App& a, Btn b) {
+    a.popup.open = false; // a SELECT combo always leaves the list
     switch (b) {
     case BTN_LEFT:
     case BTN_RIGHT:
@@ -118,6 +119,10 @@ void onDirection(App& a, Btn b) {
     int dx = b == BTN_LEFT ? -1 : b == BTN_RIGHT ? 1 : 0;
     int dy = b == BTN_UP ? -1 : b == BTN_DOWN ? 1 : 0;
     bool editing = a.held[BTN_A] && a.aScreen == a.screen;
+    if (a.popup.open) {
+        popupPress(a, b);
+        return;
+    }
     if (a.genOpen) {
         if (editing) genEdit(a, dx, -dy);
         else genMove(a, dy);
@@ -150,6 +155,10 @@ void onPress(App& a, Btn b) {
     a.repeatAt[b] = SDL_GetTicks() + kRepeatDelay;
     if (a.held[BTN_SELECT] && b != BTN_SELECT) {
         onSelectCombo(a, b);
+        return;
+    }
+    if (a.popup.open && b != BTN_UP && b != BTN_DOWN && b != BTN_LEFT && b != BTN_RIGHT && popupPress(a, b)) {
+        if (b == BTN_A) a.aScreen = SCR_COUNT; // a held A that picked from the list edits nothing
         return;
     }
     if (a.genOpen && onGenPress(a, b)) return;
@@ -343,6 +352,7 @@ void draw(App& a) {
     screenOps(a.screen).draw(a);
     if (a.genOpen) drawGenMenu(a);
     drawChrome(a);
+    drawPopup(a);
     SDL_RenderPresent(r);
 }
 
@@ -438,9 +448,22 @@ int main(int argc, char* argv[]) {
         char*       base = SDL_GetBasePath();
         std::string dir  = std::string(base ? base : "") + "samples/kits";
         SDL_free(base);
-        a.kits = loadKits(dir);
-        if (a.kits.empty()) a.kits = loadKits("samples/kits");
+        a.kits       = loadKits(dir);
+        a.samplesDir = dir.substr(0, dir.size() - 5); // .../samples
+        if (a.kits.empty()) {
+            a.kits       = loadKits("samples/kits");
+            a.samplesDir = "samples";
+        }
         SDL_Log("drum kits: %d", int(a.kits.size()));
+    }
+    // Grooves: grooves/*.agr next to the binary, or under the working directory.
+    {
+        char*       base = SDL_GetBasePath();
+        std::string dir  = std::string(base ? base : "") + "grooves";
+        SDL_free(base);
+        a.grooves = loadGrooves(dir);
+        if (a.grooves.empty()) a.grooves = loadGrooves("grooves");
+        SDL_Log("grooves: %d", int(a.grooves.size()));
     }
     for (int t = 0; t < kTracks; ++t) {
         a.inst[t] = &a.synths[t];
